@@ -2,3 +2,9 @@ node_modules/
 dist/
 .history/
 *.local
+
+# 本地流程工件与工具目录，不上传
+harness/
+.codegraph/
+.playwright-mcp/
+.vite/

@@ -3,7 +3,7 @@
 浏览器端 3D 体素「声学沙盒生存」游戏原型。当前为 **Sprint 1：世界与材料底座**。
 
 - 技术栈：Vite + TypeScript（strict）+ Three.js（WebGL2）+ Vitest
-- 无后端、无外部网络依赖；`harness/` 为交接工件，不参与运行。
+- 无后端、无外部网络依赖。
 
 ## 目录结构
 
@@ -22,7 +22,6 @@
 │  ├─ ui.ts              # M10（最小子集）：F2.3 材料参数面板
 │  └─ render/renderer.ts # M13 渲染骨架（InstancedMesh + 轨道相机）
 ├─ tests/                # Vitest（材料方向性/世界一致性/体素索引）
-└─ harness/              # 交接工件（spec/contract/notes 等），不参与运行
 ```
 
 ## 安装与启动
