@@ -1,0 +1,81 @@
+/**
+ * 全项目共享类型定义（Sprint 1 底座）。
+ * 命名与 tech-design §3 对齐：坐标统一使用三轴整数格坐标。
+ */
+
+/** 三轴坐标/向量（世界格坐标，方块取整数格） */
+export type XYZA = [number, number, number];
+
+/** 频段：0=低频 1=中频 2=高频 */
+export type Band = 0 | 1 | 2;
+
+/** 三频系数元组，顺序恒为 [低频, 中频, 高频] */
+export type Triplet = [number, number, number];
+
+export type MaterialName =
+  | 'foam'
+  | 'wood'
+  | 'glass'
+  | 'stone'
+  | 'concrete'
+  | 'metal'
+  | 'soil';
+
+/** 材料参数：唯一数据源 materials.table（tech-design §3.1）；reflect 为派生字段 */
+export interface MaterialSpec {
+  id: number; // 0..6
+  name: MaterialName;
+  mass: number;
+  durability: number;
+  abs: Triplet; // 吸收系数 α
+  trans: Triplet; // 透射系数 τ
+  reflect: Triplet; // 派生：clamp(1-abs-trans, 0.01, 1)
+}
+
+/** 方块引用：与 tech-design §4.1 IWorldRead.blockAt 字段一致 */
+export interface BlockRef {
+  material: number; // 0=空气, 1..7=材料
+  durability: number;
+  facility: FacilityState | null;
+}
+
+/** 设施状态（S1 尚不产生设施，保留类型以备后续 sprint 复用） */
+export interface FacilityState {
+  id: number;
+  kind: string;
+  pos: number;
+  yaw: number;
+  energy: number;
+  coreHp: number;
+  band: Band | 3;
+  linkFrom: number[];
+  linkTo: number[];
+  busState: 'idle' | 'active' | 'disabled';
+}
+
+/** 固定环境声源点 */
+export interface SoundSource {
+  id: number;
+  pos: XYZA; // 世界格坐标（整数）
+  dominantBand: Band; // 0/1/2 各一
+  mineable: false;
+}
+
+/** 性能观测字段（state.perf） */
+export interface BenchResult {
+  avgMs: number;
+  p95Ms: number;
+  raysPerSec: number;
+}
+
+export interface PerfState {
+  fps: number;
+  avgFrameMs: number;
+  drawCalls: number;
+  instances: number;
+  pixelRatio: number;
+  lastBench: BenchResult | null;
+}
+
+/** 图形档 */
+export type GraphicTier = 'high' | 'low';

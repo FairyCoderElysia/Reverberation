@@ -1,0 +1,119 @@
+:root {
+  --bg: #0b1220;
+  --panel-bg: rgba(10, 18, 32, 0.86);
+  --fg: #cfe7f5;
+  --accent: #34d9b8;
+  --line: rgba(120, 220, 210, 0.25);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  overflow: hidden;
+}
+
+#app {
+  position: fixed;
+  inset: 0;
+}
+
+#app canvas { display: block; }
+
+.hud {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 5;
+  pointer-events: none;
+}
+.hud-title { font-size: 15px; font-weight: 700; color: var(--accent); }
+.hud-hint { font-size: 12px; color: rgba(207, 231, 245, 0.75); margin-top: 4px; }
+
+.panel {
+  position: fixed;
+  right: 12px;
+  top: 12px;
+  bottom: 12px;
+  width: 340px;
+  overflow-y: auto;
+  z-index: 5;
+  background: var(--panel-bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  font-size: 12px;
+  backdrop-filter: blur(4px);
+}
+
+.panel-head {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 10px;
+  letter-spacing: 0.5px;
+}
+
+.mat-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  border-bottom: 1px solid rgba(120, 220, 210, 0.12);
+}
+.mat-row:last-of-type { border-bottom: none; }
+
+.mat-name {
+  width: 52px;
+  font-weight: 700;
+  color: var(--c, #fff);
+  flex: none;
+}
+
+.mat-name::before {
+  content: "■ ";
+  color: var(--c, #fff);
+}
+
+.band {
+  flex: 1;
+  color: rgba(207, 231, 245, 0.9);
+  white-space: nowrap;
+}
+.band b { color: #9fd8ef; font-weight: 600; margin-right: 2px; }
+
+.mat-dur {
+  width: 52px;
+  text-align: right;
+  color: #f3c96b;
+  flex: none;
+}
+
+.panel-leg {
+  margin-top: 10px;
+  display: flex;
+  gap: 12px;
+  color: rgba(207, 231, 245, 0.7);
+}
+.panel-leg i { font-style: normal; }
+.panel-leg i::before { content: "● "; color: var(--lc, #fff); }
+
+.nogl {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 20;
+  max-width: 480px;
+  background: rgba(30, 10, 10, 0.92);
+  border: 1px solid #ff6b6b;
+  color: #ffd7d7;
+  padding: 16px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 1.6;
+}

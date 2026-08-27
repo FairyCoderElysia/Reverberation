@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Voice · 声学沙盒生存（Sprint 1 世界底座）</title>
+    <link rel="stylesheet" href="/css/style.css" />
+    <script>
+      // window.__app 骨架：DOMContentLoaded 之前即可访问（SP1-05 生成端规范 §6）
+      // main 模块随后填充真实 state/debug/reset。
+      (function mountAppSkeleton() {
+        if (window.__app) return;
+        window.__app = {
+          state: { ready: false, perf: { fps: 0, avgFrameMs: 0, drawCalls: 0, instances: 0, pixelRatio: 0, lastBench: null } },
+          reset: function () {},
+          debug: {},
+        };
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="material-panel" class="panel"></div>
+    <div id="hud" class="hud">
+      <div class="hud-title">声学沙盒生存 · 世界底座</div>
+      <div class="hud-hint">拖拽旋转 · 滚轮缩放 · 右键平移；彩色八面体为三个固定环境声源（红=低频 / 黄=中频 / 蓝=高频）</div>
+    </div>
+    <div id="nogl-msg" class="nogl" style="display:none">
+      当前浏览器不支持 WebGL2，已降级为只读界面模式（无 3D 渲染）。仍可通过 window.__app 读取世界与材料数据。
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
