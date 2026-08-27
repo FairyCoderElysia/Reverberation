@@ -1,16 +1,8 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { GraphicTier, SoundSource, XYZA } from '../types';
-
-const MATERIAL_COLORS: number[] = [
-  0xc9e265,
-  0x8a5a2b,
-  0x7fd4e0,
-  0x8d8d93,
-  0x9aa3ad,
-  0xcfd6dd,
-  0x6b4f2f,
-];
+import { BAND_COLORS, hexToNumber, MATERIAL_COLORS } from '../theme';
+import { blockIndex, WORLD_X, WORLD_Y, WORLD_Z } from '../world';
 
 export function detectWebGL2(): boolean {
   if (typeof window === 'undefined') return false;
@@ -95,20 +87,17 @@ export class Renderer {
     for (const mk of this.markers) this.scene.remove(mk);
     this.markers = [];
 
-    const X = 64;
-    const Y = 24;
-    const Z = 64;
-    const index = (x: number, y: number, z: number): number => x + 64 * (z + 64 * y);
+    // 索引公式与世界尺寸单一来源（Code-M2）：从 world.ts 导入，禁止在此硬编码
     const solid = (x: number, y: number, z: number): boolean => {
-      if (x < 0 || x >= X || y < 0 || y >= Y || z < 0 || z >= Z) return false;
-      return worldIds[index(x, y, z)] !== 0;
+      if (x < 0 || x >= WORLD_X || y < 0 || y >= WORLD_Y || z < 0 || z >= WORLD_Z) return false;
+      return worldIds[blockIndex(x, y, z)] !== 0;
     };
 
     const exposed: number[][][] = Array.from({ length: 7 }, () => []);
-    for (let z = 0; z < Z; z++) {
-      for (let x = 0; x < X; x++) {
-        for (let y = 0; y < Y; y++) {
-          const id = worldIds[index(x, y, z)];
+    for (let z = 0; z < WORLD_Z; z++) {
+      for (let x = 0; x < WORLD_X; x++) {
+        for (let y = 0; y < WORLD_Y; y++) {
+          const id = worldIds[blockIndex(x, y, z)];
           if (id === 0 || id > 7) continue;
           if (
             !solid(x + 1, y, z) ||
@@ -130,7 +119,7 @@ export class Renderer {
     for (let id = 1; id <= 7; id++) {
       const list = exposed[id - 1];
       if (list.length === 0) continue;
-      const mat = new THREE.MeshLambertMaterial({ color: MATERIAL_COLORS[id - 1] });
+      const mat = new THREE.MeshLambertMaterial({ color: hexToNumber(MATERIAL_COLORS[id - 1]) });
       const mesh = new THREE.InstancedMesh(geo, mat, list.length);
       for (let i = 0; i < list.length; i++) {
         const x = list[i][0];
@@ -151,10 +140,10 @@ export class Renderer {
 
   addSourceMarkers(sources: SoundSource[], spawn: XYZA): void {
     if (!this.renderer) return;
-    const bandColors = [0xff5d5d, 0xffd166, 0x5dd9ff];
+    
     for (const s of sources) {
       const geo = new THREE.OctahedronGeometry(0.7, 0);
-      const mat = new THREE.MeshBasicMaterial({ color: bandColors[s.dominantBand] });
+      const mat = new THREE.MeshBasicMaterial({ color: hexToNumber(BAND_COLORS[s.dominantBand]) });
       const marker = new THREE.Mesh(geo, mat);
       marker.position.set(s.pos[0] + 0.5, s.pos[1] + 0.5, s.pos[2] + 0.5);
       this.scene.add(marker);
@@ -181,6 +170,7 @@ export class Renderer {
     this.rafId = requestAnimationFrame(loop);
   }
 
+  // TODO(S2)：渲染生命周期销毁/降级重建时调用。
   stop(): void {
     cancelAnimationFrame(this.rafId);
   }

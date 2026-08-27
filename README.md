@@ -14,6 +14,7 @@
 │  ├─ main.ts            # 启动编排（生成世界→渲染→__app→面板）
 │  ├─ config.ts          # 可调参数常量（唯一来源）
 │  ├─ materials.ts       # M2 材料表（唯一数据源，tech-design §3.1）
+│  ├─ theme.ts           # 调色板单一常量源（材质 7 色 + 频段 3 色）
 │  ├─ rng.ts             # 确定性种子 RNG（世界生成禁用 Math.random）
 │  ├─ worldgen.ts        # 地形/矿脉/声源点/出生点生成（确定性）
 │  ├─ world.ts           # M1 体素存储 + 索引公式 + DDA 射线遍历
@@ -37,7 +38,7 @@ npm run build      # tsc --noEmit + vite build
 ## 调试句柄 `window.__app`
 
 - `state`：`seed` / `worldSize` / `materials`（7 材料三频参数）/ `soundSources` /
-  `player.spawn` / `perf` / `blockAt(g)` / `surfaceHeight(x,z)`
+  `player.spawn` / `perf` / `blockAt(g)` / `surfaceHeight(x,z)` / `surfaceHeights()`
 - `reset()`：等价「新游戏」（换种子 + 恢复默认材料参数）
 - `debug`：`regenerate(seed)` / `setMaterial(id,patch)` / `resetMaterials()` /
   `setGraphicTier('high'|'low')` / `benchRay(opts)` / `findMaterialBlocks(id)`
@@ -46,8 +47,8 @@ npm run build      # tsc --noEmit + vite build
 
 ```js
 window.__app.state.worldSize;              // [64, 64, 24]
-window.__app.state.surfaceHeight(10, 10);  // 该列地表高度（单列）
-window.__app.state.surfaceHeight();           // 无参：64×64 扁平高度数组（x + 64*z 序）
+window.__app.state.surfaceHeight(10, 10);  // 该列地表高度（单列 number）
+window.__app.state.surfaceHeights();        // 64×64 扁平高度数组（x + 64*z 序）
 window.__app.debug.findMaterialBlocks(5);  // 金属方块坐标列表
 window.__app.debug.benchRay({ rays: 128, bounces: 3 });
 ```

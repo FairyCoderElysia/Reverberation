@@ -3,6 +3,7 @@
  * 接收 state.materials 同源数据（effectiveMaterials），不写状态。
  */
 import { MATERIAL_ZH } from './materials';
+import { BAND_COLORS, MATERIAL_COLORS } from './theme';
 import type { MaterialSpec } from './types';
 import type { MaterialName } from './types';
 
@@ -33,11 +34,9 @@ export function renderMaterialPanel(specs: MaterialSpec[]): void {
 }
 
 function colorFor(id: number): string {
-  const colors = ['#c9e265', '#8a5a2b', '#7fd4e0', '#8d8d93', '#9aa3ad', '#cfd6dd', '#6b4f2f'];
-  return colors[id] ?? '#fff';
+  return MATERIAL_COLORS[id] ?? '#fff';
 }
 
 function legColor(id: number): string {
-  const colors = ['#ff5d5d', '#ffd166', '#5dd9ff'];
-  return colors[id] ?? '#fff';
+  return BAND_COLORS[id] ?? '#fff';
 }

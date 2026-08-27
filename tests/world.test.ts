@@ -49,3 +49,24 @@ describe('体素索引公式（确定性关键）', () => {
     expect(inBounds(0, 0, 64)).toBe(false);
   });
 });
+
+describe('索引公式单一来源（Code-M2）', () => {
+  it('renderer 不再重复硬编码索引公式/世界尺寸，blockIndex 唯一导出', () => {
+    const files = import.meta.glob('../src/render/renderer.ts', {
+      query: '?raw',
+      import: 'default',
+      eager: true,
+    }) as Record<string, string>;
+    const src = files[Object.keys(files)[0]] ?? '';
+    expect(src).toBeTruthy();
+    expect(src).toContain('blockIndex');
+    expect(src).toContain('WORLD_X');
+    expect(src).toContain('WORLD_Y');
+    expect(src).toContain('WORLD_Z');
+    // 渲染层不得再出现本地魔数索引公式或尺寸常量
+    expect(src).not.toMatch(/x \+ 64 \* \(z \+ 64 \* y\)/);
+    expect(src).not.toMatch(/const X = 64;/);
+    expect(src).not.toMatch(/const Y = 24;/);
+    expect(src).not.toMatch(/const Z = 64;/);
+  });
+});

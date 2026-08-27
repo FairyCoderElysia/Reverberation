@@ -24,5 +24,3 @@ export const PIXEL_RATIO_LOW = 0.75;
 /** DDA 基准采样的射线最大距离（格，防御性上限） */
 export const BENCH_RAY_MAX_DIST = 200;
 
-/** 世界生成整体是否使用 Math.random 的开关（恒为 false：只允许注入种子 RNG） */
-export const WORLDGEN_ALLOW_MATH_RANDOM = false;

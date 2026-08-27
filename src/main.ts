@@ -10,6 +10,15 @@ import { renderMaterialPanel } from './ui';
 import type { GraphicTier } from './types';
 
 function boot(): void {
+  try {
+    bootInner();
+  } catch (err) {
+    // Code-m5：启动期异常不白屏；显示中文错误横幅，且 window.__app 骨架（index.html 已挂）仍可用。
+    showBootError(err);
+  }
+}
+
+function bootInner(): void {
   // 1. 材料方向性自检（违规则立即暴露）
   assertDefaultTableValid();
 
@@ -84,6 +93,23 @@ function boot(): void {
 function showNoGlFallback(): void {
   const el = document.getElementById('nogl-msg');
   if (el) el.style.display = 'block';
+}
+
+/** 启动期异常的中文错误横幅（Code-m5）。 */
+function showBootError(err: unknown): void {
+  const el = document.getElementById('boot-error');
+  if (!el) return;
+  const msg = err instanceof Error ? err.message : String(err);
+  el.textContent = '启动失败：' + msg + '。请刷新重试；window.__app 仍可读取世界与材料数据。';
+  el.style.display = 'block';
+  // 保证即使在极端错误下，调试句柄骨架依然存在（不覆盖 index.html 内联骨架）
+  if (!window.__app) {
+    window.__app = {
+      state: { ready: false, perf: { fps: 0, avgFrameMs: 0, drawCalls: 0, instances: 0, pixelRatio: 0, lastBench: null } },
+      reset: () => {},
+      debug: {},
+    } as unknown as __App;
+  }
 }
 
 window.addEventListener('DOMContentLoaded', boot);

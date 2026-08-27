@@ -15,17 +15,7 @@ export function mulberry32(seed: number): () => number {
   };
 }
 
-/** 从一个整数 seed 派生一个非零 int32（用于 seed 归一化/换种子） */
-export function normalizeSeed(seed: number): number {
-  return seed >>> 0;
-}
-
 /** 返回 [lo, hi] 闭区间内的随机整数（含两端） */
 export function randInt(rng: () => number, lo: number, hi: number): number {
   return lo + Math.floor(rng() * (hi - lo + 1));
-}
-
-/** 返回 [0, n) 内的随机整数 */
-export function randIndex(rng: () => number, n: number): number {
-  return Math.floor(rng() * n);
 }

@@ -3,11 +3,13 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  applyOverride,
   deriveReflect,
   effectiveMaterials,
   MATERIAL_TABLE,
   mergeTriplet,
   validateDefaultTable,
+  validateTable,
 } from '../src/materials';
 
 describe('材料表（唯一数据源）', () => {
@@ -97,5 +99,27 @@ describe('材料表（唯一数据源）', () => {
     const after = effectiveMaterials(over)[0].reflect;
     expect(after).not.toEqual(before);
     expect(before).toEqual(effectiveMaterials(new Map())[0].reflect);
+  });
+});
+
+describe('applyOverride 输入夹取与方向性按 name 校验', () => {
+  it('applyOverride 把 abs/trans 夹取到 [0,1]、mass ≥0、durability 正整数、非有限数忽略', () => {
+    const wood = MATERIAL_TABLE.find((r) => r.name === 'wood')!;
+    const merged = applyOverride(wood, {
+      abs: [5, -1, Number.NaN],
+      trans: [2, Number.POSITIVE_INFINITY, -3],
+      durability: -10,
+      mass: -3.5,
+    });
+    expect(merged.abs).toEqual([1, 0, wood.abs[2]]); // 5→1, -1→0, NaN 忽略保留默认
+    expect(merged.trans).toEqual([1, wood.trans[1], 0]); // 2→1, Inf 忽略, -3→0
+    expect(merged.durability).toBe(1); // -10 → 正整数下限 1
+    expect(merged.mass).toBe(0); // -3.5 → 0
+  });
+
+  it('validateTable 按 name 查找而非固定下标：打乱顺序仍能正确校验', () => {
+    const permuted = [...MATERIAL_TABLE].reverse();
+    // 默认表任意排列都仍通过方向性校验（按 name 取材料）
+    expect(validateTable(permuted)).toEqual([]);
   });
 });

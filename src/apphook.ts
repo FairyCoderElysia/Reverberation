@@ -1,17 +1,18 @@
 /**
- * M12 调试句柄 window.__app（初版）：state / reset() / debug()。
+ * M12 调试句柄 window.__app（初版）：state / reset() / debug（对象，非可调用函数）。
  * 覆盖 Sprint 1 全部数值断言字段（SP1-02..14）。
  */
 import { runBenchRay } from './bench';
-import { PIXEL_RATIO_HIGH_CAP } from './config';
 import {
   effectiveMaterials,
+  effectiveRows,
   MATERIAL_TABLE,
   validateDefaultTable,
+  validateTable,
 } from './materials';
 import { mergeTriplet } from './materials';
 import type { MaterialOverrides } from './materials';
-import { generateWorld, SOUND_SOURCE_DEFS } from './worldgen';
+import { generateWorld } from './worldgen';
 import type { GraphicTier, PerfState, SoundSource, XYZA } from './types';
 import { World } from './world';
 
@@ -23,17 +24,11 @@ export interface AppState {
   player: { spawn: XYZA };
   perf: PerfState;
   blockAt: (g: XYZA) => { material: number; durability: number; facility: unknown };
-  /**
-   * SP1-03/SP1-10 地表高度读取。
-   * - surfaceHeight(x, z) 返回单列地表高度（数字）；
-   * - surfaceHeight() 无参调用返回 64×64 扁平高度数组（x + 64*z 序），
-   *   满足 contract v1.2「返回 64×64 高度数组」的数值断言口径（双形态兼容）。
-   */
-  surfaceHeight: {
-    (x: number, z: number): number;
-    (): number[];
-  };
-  getWorldIds: () => Uint8Array; // 渲染/测试共享的世界快照
+  /** SP1-03(v1.3)：单列地表高度（数字） */
+  surfaceHeight: (x: number, z: number) => number;
+  /** SP1-03(v1.3)：64×64 扁平高度数组（x + 64*z 序），副本 */
+  surfaceHeights: () => number[];
+  getWorldIds: () => Uint8Array; // 渲染/测试共享的世界快照（返回副本）
 }
 
 export interface DebugHooks {
@@ -84,7 +79,7 @@ export function buildApp(
     avgFrameMs: 0,
     drawCalls: 0,
     instances: 0,
-    pixelRatio: PIXEL_RATIO_HIGH_CAP,
+    pixelRatio: readPixelRatio(),
     lastBench: null,
   };
 
@@ -151,20 +146,17 @@ export function buildApp(
       const b = world.blockAt(g);
       return { material: b.material, durability: b.durability, facility: b.facility as unknown };
     },
-    surfaceHeight: ((x?: number, z?: number) => {
-      if (x === undefined || z === undefined) {
-        // 无参：返回 64×64 扁平高度数组（复制，避免暴露内部 TypedArray 被改写）
-        return Array.from(world.surfaceH);
-      }
-      return world.surfaceHeight(x, z);
-    }) as AppState['surfaceHeight'],
-    getWorldIds: () => world.ids,
+    surfaceHeight: (x, z) => world.surfaceHeight(x, z),
+    surfaceHeights: () => Array.from(world.surfaceH),
+    getWorldIds: () => world.ids.slice(),
   };
 
   const debug: DebugHooks = {
     regenerate,
     setMaterial: (id: number, patch: MaterialOverrides) => {
-      if (!Number.isInteger(id) || id < 0 || id >= MATERIAL_TABLE.length) return;
+      if (!Number.isInteger(id) || id < 0 || id >= MATERIAL_TABLE.length) {
+        throw new Error('setMaterial: 材料 id 非法（需为 0..' + (MATERIAL_TABLE.length - 1) + ' 的整数）');
+      }
       const prev = overrides.get(id) ?? {};
       const next: MaterialOverrides = {
         abs: mergeTriplet(prev.abs, patch.abs),
@@ -172,6 +164,13 @@ export function buildApp(
         durability: patch.durability ?? prev.durability,
         mass: patch.mass ?? prev.mass,
       };
+      // 覆盖后对 effective 材料表重新执行方向性校验（Code-M1）；违规则拒绝并抛错，不落盘
+      const trial = new Map(overrides);
+      trial.set(id, next);
+      const violations = validateTable(effectiveRows(trial));
+      if (violations.length > 0) {
+        throw new Error('setMaterial 使材料方向性约束失效: ' + violations.join('; '));
+      }
       overrides.set(id, next);
       onMaterialChange();
     },
@@ -201,5 +200,3 @@ export function assertDefaultTableValid(): void {
     throw new Error('材料方向性约束校验失败: ' + errors.join('; '));
   }
 }
-
-export const SOUND_SOURCE_COUNT = SOUND_SOURCE_DEFS.length;

@@ -29,10 +29,12 @@ export interface GeneratedWorld {
   soundSources: SoundSource[];
 }
 
-/** 2D 值噪声：格点随机 + 双线性插值，确定性 */
+/** 2D 值噪声：格点随机 + 双线性插值（smoothstep），确定性。
+ * 格点网格尺寸按「覆盖所有采样格所需的 i 与 i+1」构建，保证 fu = u - floor(u) 始终
+ * 落在 [0,1)，索引 i+1 不会越界（QA-M1 修复：此前先夹索引再算权重导致 fu > 1）。 */
 function valueNoise(rng: () => number, cell: number, out: number[][]): void {
-  const gx = cell + 1;
-  const gz = cell + 1;
+  const gx = Math.floor((WORLD_X - 1) / cell) + 2;
+  const gz = Math.floor((WORLD_Z - 1) / cell) + 2;
   const grid: number[][] = [];
   for (let i = 0; i < gx; i++) {
     const row: number[] = [];
@@ -43,11 +45,11 @@ function valueNoise(rng: () => number, cell: number, out: number[][]): void {
     for (let xi = 0; xi < WORLD_X; xi++) {
       const u = xi / cell;
       const v = zi / cell;
-      const i = Math.min(Math.floor(u), cell - 1);
-      const j = Math.min(Math.floor(v), cell - 1);
-      const fu = u - i;
+      const i = Math.floor(u);
+      const j = Math.floor(v);
+      const fu = u - i; // 先取分数：∈ [0,1)
       const fv = v - j;
-      const sx = fu * fu * (3 - 2 * fu); // smoothstep
+      const sx = fu * fu * (3 - 2 * fu); // smoothstep，权重 ∈ [0,1]
       const sy = fv * fv * (3 - 2 * fv);
       const a = grid[i][j];
       const b = grid[i + 1][j];

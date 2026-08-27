@@ -14,7 +14,7 @@ export function blockIndex(x: number, y: number, z: number): number {
   return x + WORLD_X * (z + WORLD_Z * y);
 }
 
-/** 由线性索引反解坐标（用于单测验证公式自洽） */
+/** 由线性索引反解坐标（用于单测验证公式自洽）。// TODO(S2)：设施反向寻址/调试坐标解码将复用。 */
 export function blockCoords(idx: number): XYZA {
   const x = idx % WORLD_X;
   const z = Math.floor(idx / WORLD_X) % WORLD_Z;
@@ -31,7 +31,6 @@ export interface DdaVisitContext {
   y: number;
   z: number;
   t: number;
-  tMax: number;
   face: number; // 0..5，进入该体的面
   prev?: XYZA;
 }
@@ -72,7 +71,7 @@ export function traverseVoxels(
 
   while (t <= maxT) {
     steps += 1;
-    const ctx: DdaVisitContext = { x, y, z, t, tMax: 0, face };
+    const ctx: DdaVisitContext = { x, y, z, t, face };
     const stop = visit(ctx);
     if (stop === true) return steps;
 
@@ -172,6 +171,7 @@ export class World {
     return this.surfaceH[x + WORLD_X * z];
   }
 
+  // TODO(S2)：玩家建造/拆除在 Sprint 2 落地，届时消费此方法。
   setBlock(g: XYZA, material: number, durability: number): void {
     const [x, y, z] = g;
     if (!inBounds(x, y, z)) return;
@@ -203,6 +203,7 @@ export class World {
     }
   }
 
+  // TODO(S2)：Sprint 2 库存/放置计数消费此方法。
   countBlocks(): number {
     let n = 0;
     for (let i = 0; i < this.ids.length; i++) {
