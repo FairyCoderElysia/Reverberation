@@ -39,8 +39,14 @@ export const PLAYER_TERMINAL_FALL = 40;
 /** 鼠标视角灵敏度（弧度 / 像素） */
 export const LOOK_SENSITIVITY = 0.0025;
 
-/** 物理固定步进（Hz）：碰撞/重力按固定步推进，保证相同输入序列确定性 */
-export const PHYS_HZ = 60;
+/**
+ * 玩家物理固定步进（Hz）：碰撞/重力按固定步推进，保证相同输入序列确定性。
+ * 仅用于玩家碰撞/重力；「PHYS_HZ」名义保留给未来声学模拟 10-20Hz 步进，勿混用。
+ */
+export const PLAYER_PHYS_HZ = 60;
+
+/** 存档序列化体积预警阈值（字节）：超过在状态行提示，不阻塞写档 */
+export const SAVE_SIZE_WARN_BYTES = 40 * 1024;
 
 /** 单档存档键与 schema 版本 */
 export const SAVE_KEY = 'voice.save.v1';

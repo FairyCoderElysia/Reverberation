@@ -31,7 +31,7 @@ function bootInner(): void {
   const game = new Game(generated);
 
   // 4. 启动自动载入唯一存档（SP2-09「继续」路径）
-  const loadResult = game.loadSave();
+  game.loadSave();
 
   // 5. 渲染骨架
   const container = document.getElementById('app') as HTMLElement;
@@ -65,21 +65,24 @@ function bootInner(): void {
   renderMaterialPanel(app.state.materials);
 
   // 库存栏点选回调（与热键同一状态入口：game.selected）
+  function refreshInventory(): void {
+    renderInventory(app.state.inventory, game.selected, selectHandler);
+  }
   function selectHandler(id: number): void {
     game.selected = id;
-    renderInventory(app.state.inventory, game.selected, selectHandler);
+    refreshInventory();
   }
   renderInventory(app.state.inventory, app.state.selected, selectHandler);
 
   // 载入结果的中文提示（损坏/版本不兼容可见、不白屏）
-  if (loadResult === 'invalid') {
-    renderStatus(game.loadNotice);
-  }
+  renderStatus(game.uiNotice ?? game.saveError ?? game.loadNotice);
 
   // 9. 第一人称输入绑定
-  bindInput(game, renderer);
+  bindInput(game, renderer, refreshInventory);
 
   // 10. 帧循环（物理固定步 + 视图 + UI 回流）
+  let lastInvSig = game.inventory.join(',');
+  let lastSelected = game.selected;
   const onFrame = (): void => {
     const now = performance.now();
     const dtMs = now - lastT;
@@ -101,7 +104,14 @@ function bootInner(): void {
     app.state.perf.pixelRatio = renderer.getPixelRatio();
 
     renderMiningProgress(game.miningProgress);
-    renderStatus(game.saveError ?? game.loadNotice);
+    // UI 与 state 恒一致（SP2-06）：库存/选中任一变化后同帧重绘库存栏
+    const invSig = game.inventory.join(',');
+    if (invSig !== lastInvSig || game.selected !== lastSelected) {
+      lastInvSig = invSig;
+      lastSelected = game.selected;
+      refreshInventory();
+    }
+    renderStatus(game.uiNotice ?? game.saveError ?? game.loadNotice);
   };
 
   if (renderer.available) {
@@ -119,7 +129,7 @@ function bootInner(): void {
 }
 
 /** 键盘 + 鼠标输入绑定。视角：右键拖动 / 指针锁移动；挖掘：按住左键；放置：右键点击。 */
-function bindInput(game: Game, renderer: Renderer): void {
+function bindInput(game: Game, renderer: Renderer, onSelectionChange: () => void): void {
   const keys = new Set<string>();
   const syncKeys = (): void => {
     game.input.forward = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
@@ -131,7 +141,10 @@ function bindInput(game: Game, renderer: Renderer): void {
     if (e.code === 'Space') e.preventDefault();
     if (e.code.startsWith('Digit')) {
       const n = Number(e.code.slice(5));
-      if (n >= 1 && n <= 7) game.selected = n;
+      if (n >= 1 && n <= 7) {
+        game.selected = n;
+        onSelectionChange();
+      }
     }
     keys.add(e.code);
     syncKeys();

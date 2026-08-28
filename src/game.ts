@@ -2,7 +2,7 @@
  * Game：S2 单权威运行时（世界 + 玩家 + 库存 + 挖掘 + 放置/拆除 + 存档）。
  * 渲染/UI/apphook 均为末端消费者；本模块不依赖渲染与 UI。
  */
-import { effectiveMaterials, effectiveRows, MATERIAL_TABLE } from './materials';
+import { effectiveMaterials, effectiveRows, MATERIAL_TABLE, MATERIAL_ZH } from './materials';
 import type { MaterialOverrides } from './materials';
 import { aabbIntersects, lookDirection, stepPlayer } from './player';
 import type { PlayerBody, PlayerInput } from './player';
@@ -15,10 +15,11 @@ import type { GeneratedWorld } from './worldgen';
 import {
   INTERACTION_REACH,
   MINING_SECONDS,
-  PHYS_HZ,
+  PLAYER_PHYS_HZ,
   PLAYER_EYE_HEIGHT,
   PLAYER_HALF_WIDTH,
   PLAYER_HEIGHT,
+  SAVE_SIZE_WARN_BYTES,
   SAVE_VERSION,
 } from './config';
 import { inBounds, World, WORLD_X, WORLD_Y, WORLD_Z } from './world';
@@ -50,6 +51,9 @@ export function memoryStorage(): StorageLike {
   };
 }
 
+/** 移除方块时的返还量：天然挖除 +1、玩家放置拆除全额返还；S2 每方块恰 1 单位材料。 */
+const BREAK_REFUND = 1;
+
 function browserStorage(): StorageLike | null {
   try {
     if (typeof window !== 'undefined' && window.localStorage) return window.localStorage;
@@ -75,6 +79,8 @@ export class Game {
   lastSavedAt: number;
   saveError: string | null;
   loadNotice: string | null;
+  /** 交互类可见提示（挖掘/放置失败原因等），与存档异常字段 saveError 分离 */
+  uiNotice: string | null;
 
   overrides: Map<number, MaterialOverrides>;
   private seedCounter: number;
@@ -99,6 +105,7 @@ export class Game {
     this.lastSavedAt = 0;
     this.saveError = null;
     this.loadNotice = null;
+    this.uiNotice = null;
 
     this.overrides = new Map<number, MaterialOverrides>();
     this.seedCounter = (generated.seed + 0x51ab3f) >>> 0;
@@ -137,10 +144,10 @@ export class Game {
   tickFrame(dtMs: number): void {
     const dt = Math.min(Math.max(dtMs, 0), 100);
     this.accMs += dt;
-    const stepMs = 1000 / PHYS_HZ;
+    const stepMs = 1000 / PLAYER_PHYS_HZ;
     while (this.accMs >= stepMs) {
       this.accMs -= stepMs;
-      stepPlayer(this.body, this.input, 1 / PHYS_HZ, this.world);
+      stepPlayer(this.body, this.input, 1 / PLAYER_PHYS_HZ, this.world);
     }
     this.updateMining(dt / 1000);
     if (this.placePressed) {
@@ -245,13 +252,14 @@ export class Game {
   /**
    * 拆除方块（挖掘与拆除共用同一入库口径）：
    * 天然方块挖除入库 +1；玩家放置方块拆除全额返还（材料 1 单位，S2 无损耗）。
+   * 二者当前同为「每方块 1 单位材料」；未来设施拆除的「配方返还量」在此接入。
    */
-  applyBreak(cell: XYZA, material: number, placed: boolean): void {
+  applyBreak(cell: XYZA, material: number, _placed: boolean): void {
     const [x, y, z] = cell;
     if (!inBounds(x, y, z)) return;
     if (this.world.blockAt(cell).material === 0) return;
     this.world.removeBlock(cell);
-    const refund = placed ? 1 : 1;
+    const refund = BREAK_REFUND;
     this.inventory[material] = Math.max(0, this.inventory[material]) + refund;
     this.autoSave();
   }
@@ -260,49 +268,44 @@ export class Game {
 
   tryPlaceSelected(): { ok: boolean; reason: string } {
     const id = this.selected;
-    if (id < 1 || id > 7) return { ok: false, reason: '未选中任何材料' };
+    if (id < 1 || id > 7) {
+      this.uiNotice = '尚未选中任何材料（按 1-7 或点击库存槽选中）';
+      return { ok: false, reason: '未选中任何材料' };
+    }
     if (this.inventory[id] <= 0) {
-      this.saveError = '库存不足：无法放置「' + this.materialNameZh(id) + '」';
+      this.uiNotice = '库存不足：无法放置「' + this.materialNameZh(id) + '」';
       return { ok: false, reason: '库存不足' };
     }
     const hit = this.pickLook();
-    if (!hit) return { ok: false, reason: '超出交互距离或未命中' };
+    if (!hit) {
+      this.uiNotice = '超出交互距离或未命中目标，无法放置';
+      return { ok: false, reason: '超出交互距离或未命中' };
+    }
     const placeCell = placeCellFromHit(hit);
     if (!inBounds(placeCell[0], placeCell[1], placeCell[2])) {
+      this.uiNotice = '目标格越界，无法放置';
       return { ok: false, reason: '目标格越界' };
     }
     if (this.world.blockAt(placeCell).material !== 0) {
+      this.uiNotice = '目标格已有方块，无法放置';
       return { ok: false, reason: '目标格已有方块' };
     }
     if (cellOverlapsPlayer(this.body.pos, placeCell)) {
+      this.uiNotice = '不能放置到玩家身体内';
       return { ok: false, reason: '不能放置到玩家身体内' };
     }
-    const dur = MATERIAL_TABLE[id - 1].durability;
+    const dur = this.materialSpecs()[id - 1].durability;
     this.world.putBlock(placeCell, id, dur);
     this.inventory[id] -= 1;
+    this.uiNotice = null;
     this.autoSave();
     return { ok: true, reason: 'ok' };
   }
 
+  /** 材料中文名：单一来源 MATERIAL_ZH（materials.ts），不在此自造副本。 */
   materialNameZh(id: number): string {
-    switch (id) {
-      case 1:
-        return '泡沫';
-      case 2:
-        return '木材';
-      case 3:
-        return '玻璃';
-      case 4:
-        return '石材';
-      case 5:
-        return '混凝土';
-      case 6:
-        return '金属';
-      case 7:
-        return '土层';
-      default:
-        return '未知';
-    }
+    const row = MATERIAL_TABLE[id - 1];
+    return row ? MATERIAL_ZH[row.name] : '未知';
   }
 
   /* ================= 存档 ================= */
@@ -326,9 +329,15 @@ export class Game {
         playerPitch: this.body.pitch,
         savedAt: this.now(),
       };
-      writeSaveRaw(this.storage, serializeSave(payload));
+      const text = serializeSave(payload);
+      writeSaveRaw(this.storage, text);
       this.lastSavedAt = this.now();
       this.saveError = null;
+      // 体积预警（不阻塞）：序列化结果超阈值时在状态行提示
+      if (text.length > SAVE_SIZE_WARN_BYTES) {
+        this.uiNotice =
+          '存档体积超限警告：约 ' + Math.round(text.length / 1024) + 'KB（阈值 ' + SAVE_SIZE_WARN_BYTES / 1024 + 'KB），已写入但建议留意。';
+      }
       return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -364,6 +373,7 @@ export class Game {
     const p = parsed.payload;
     this.world.ids.set(p.ids);
     this.world.placed.set(p.placed);
+    this.rebuildDurability();
     this.world.recomputeAllSurfaces();
     this.seed = p.seed >>> 0;
     this.spawn = findStandingSpawn(this.world, Math.floor(p.playerPos[0]), Math.floor(p.playerPos[2]));
@@ -380,6 +390,20 @@ export class Game {
     this.cancelMining();
     this.loadNotice = null;
     return 'loaded';
+  }
+
+  /**
+   * 由 ids 重建 durability：非空气格 durability = 有效材料表（含 debug.setMaterial override）
+   * 的对应耐久；空气格 = 0。S2 不序列化 durability，载入后必须由此恢复（contract SP2-07）。
+   */
+  private rebuildDurability(): void {
+    const specs = this.materialSpecs();
+    const ids = this.world.ids;
+    const dur = this.world.durability;
+    for (let i = 0; i < ids.length; i++) {
+      const id = ids[i];
+      dur[i] = id >= 1 && id <= 7 ? specs[id - 1].durability : 0;
+    }
   }
 
   /** 保证玩家 AABB 不落入实体：优先向上抬，否则回出生点。 */

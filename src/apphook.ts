@@ -37,9 +37,11 @@ export interface AppState {
   interactionReach: number;
   /** S2：最近一次 writeSave 成功后的 Unix 毫秒时间戳（number） */
   lastSavedAt: number;
-  /** S2：最近一次写档/载入错误的中文提示（null=无） */
+  /** S2：最近一次写档/载入异常的中文提示（null=无；只存存档异常，不承载交互提示） */
   saveError: string | null;
   loadNotice: string | null;
+  /** S2：交互类可见提示（挖掘/放置失败原因、存档体积预警等；与 saveError 分离） */
+  uiNotice: string | null;
   perf: PerfState;
   blockAt: (g: XYZA) => BlockRef;
   surfaceHeight: (x: number, z: number) => number;
@@ -108,8 +110,9 @@ export function buildApp(
       return game.seed;
     },
     get worldSize() {
-      const [wx, wy, wz] = game.world.size;
-      return [wx, wz, wy] as [number, number, number];
+      // game.world.size = [x, y, z]；对外口径恒为 [x, z, y]（64,64,24）
+      const [x, y, z] = game.world.size;
+      return [x, z, y] as [number, number, number];
     },
     get materials() {
       return game.materialSpecs();
@@ -155,6 +158,9 @@ export function buildApp(
     },
     get loadNotice() {
       return game.loadNotice;
+    },
+    get uiNotice() {
+      return game.uiNotice;
     },
     perf,
     blockAt: (g: XYZA) => game.world.blockAt(g),

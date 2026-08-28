@@ -9,6 +9,7 @@ import { generateWorld } from '../src/worldgen';
 import { Game, memoryStorage } from '../src/game';
 import { stepPlayer } from '../src/player';
 import type { PlayerBody } from '../src/player';
+import { renderInventory } from '../src/ui';
 
 const SEED = 0x20260001;
 
@@ -169,6 +170,19 @@ describe('Sprint 2 存档回环', () => {
     expect(g2.inventory).toEqual(g1.inventory);
     expect(g2.selected).toBe(g1.selected);
     expect(g2.playerPos).toEqual(posBefore);
+
+    // SP2-07/12：durability 逐格恢复——每个非空气格 durability === 有效材料表耐久，空气格 = 0
+    const specs = g2.materialSpecs();
+    const ids2 = g2.world.ids;
+    const dur2 = g2.world.durability;
+    for (let i = 0; i < ids2.length; i++) {
+      const id = ids2[i];
+      if (id !== 0) {
+        expect(dur2[i]).toBe(specs[id - 1].durability);
+      } else {
+        expect(dur2[i]).toBe(0);
+      }
+    }
   });
 
   it('SP2-08 自动保存：放置后 lastSavedAt 更新（不调用 saveNow）', () => {
@@ -241,5 +255,71 @@ describe('Sprint 2 调试钩子输入校验', () => {
     expect(app.state.blockAt([32, 15, 33]).placed).toBe(true);
     expect(app.state.blockAt([32, 16, 33]).placed).toBe(false);
     expect(app.state.placedBlocks).toBe(game.world.countPlacedBlocks());
+  });
+});
+
+describe('Sprint 2 放置/恢复耐久统一取有效材料表', () => {
+  it('SP2-07 + Code-m7：loadSave 用有效材料表（含 setMaterial override）重建 durability', () => {
+    const storage = memoryStorage();
+    const g1 = new Game(generateWorld(SEED), { storage, now: () => 1111 });
+    // 覆盖混凝土耐久 → 250，用于验证「放置」与「载入重建」都走有效材料表
+    g1.overrides.set(4, { durability: 250 });
+    setupWall(g1);
+    g1.giveItem(5, 1);
+    g1.selected = 5;
+    expect(g1.tryPlaceSelected().ok).toBe(true);
+    expect(g1.world.blockAt([32, 15, 33]).durability).toBe(250);
+    g1.writeSave();
+
+    const g2 = new Game(generateWorld(999), { storage, now: () => 2222 });
+    g2.overrides.set(4, { durability: 250 });
+    expect(g2.loadSave()).toBe('loaded');
+    // 放置方块按 effective=250 恢复（而非默认材料常量 150）
+    expect(g2.world.blockAt([32, 15, 33]).durability).toBe(250);
+  });
+
+  it('SP2-05 后半：超出交互距离/未命中放置有可见提示，且不复用 saveError', () => {
+    const { app, game } = makeApp();
+    game.teleport([32.5, 20, 32.5]);
+    game.giveItem(1, 3);
+    game.selected = 1;
+    const r = game.tryPlaceSelected();
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('超出交互距离或未命中');
+    expect(app.state.uiNotice).toMatch(/超出交互距离/);
+    expect(app.state.saveError).toBeNull();
+  });
+});
+
+describe('Sprint 2 库存 UI 回流（SP2-06）', () => {
+  it('renderInventory 渲染出的数量与 state 一致，库存变化后重绘', () => {
+    let innerHTML = '';
+    const slots: string[] = [];
+    const fakeEl = {
+      get innerHTML() {
+        return innerHTML;
+      },
+      set innerHTML(v: string) {
+        innerHTML = v;
+      },
+      querySelectorAll(): { addEventListener: () => void }[] {
+        return slots as unknown as { addEventListener: () => void }[];
+      },
+    };
+    const origDocument = (globalThis as Record<string, unknown>).document;
+    (globalThis as Record<string, unknown>).document = { getElementById: () => fakeEl };
+    try {
+      renderInventory([0, 0, 5, 0, 0, 0, 0, 0], 2, () => {});
+      expect(innerHTML).toContain('>5<'); // 槽 2 数量 5
+      expect(innerHTML).toContain('class="slot slot-selected" data-id="2"');
+
+      // 库存变化后重绘：数量与选中均跟随最新 state
+      renderInventory([0, 3, 5, 0, 0, 0, 0, 0], 1, () => {});
+      expect(innerHTML).toContain('>3<');
+      expect(innerHTML).toContain('class="slot slot-selected" data-id="1"');
+      expect(innerHTML).toContain('class="slot " data-id="2"');
+    } finally {
+      (globalThis as Record<string, unknown>).document = origDocument;
+    }
   });
 });
