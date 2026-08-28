@@ -22,6 +22,8 @@ import {
   tryRotateFacility,
   tryRemoveFacility,
 } from './facility';
+import { AcousticEngine } from './acoustics';
+import type { AcousticEvent, AcousticTuning, BandEnergy, EnergyField } from './acoustics';
 import { findStandingSpawn, generateWorld } from './worldgen';
 import type { GeneratedWorld } from './worldgen';
 import {
@@ -85,6 +87,15 @@ export class Game {
   soundSources: SoundSource[];
   storage: StorageLike | null;
   private now: () => number;
+
+  /** S4 声学内核：仅在 src/acoustics.ts 内实现传播。 */
+  acoustics: AcousticEngine;
+  /** S4 当前能量场（运行时临时，不持久化）。 */
+  energyField!: EnergyField;
+  /** S4 固定环境源开关（debug.clearSources 后为 false，reset 恢复）。 */
+  private fixedSourcesEnabled = true;
+  /** S4 会话级调试声源。 */
+  private debugSources: AcousticEvent[] = [];
 
   body: PlayerBody;
   inventory: number[];
@@ -169,6 +180,10 @@ export class Game {
 
     this.overrides = new Map<number, MaterialOverrides>();
     this.seedCounter = (generated.seed + 0x51ab3f) >>> 0;
+
+    // S4：声学引擎与初始能量场（固定环境源默认参与）。
+    this.acoustics = new AcousticEngine(this.world, () => this.materialSpecs());
+    this.recalcAcoustics();
   }
 
   /* ================= 玩家读取 ================= */
@@ -196,6 +211,76 @@ export class Game {
 
   materialRows() {
     return effectiveRows(this.overrides);
+  }
+
+  /* ================= S4 声学调试/管理 ================= */
+
+  activeSoundEvents(): AcousticEvent[] {
+    const env: AcousticEvent[] = this.fixedSourcesEnabled
+      ? this.soundSources.map((src) => ({
+          kind: 'environment' as const,
+          pos: [src.pos[0], src.pos[1], src.pos[2]] as XYZA,
+          power: [src.power[0], src.power[1], src.power[2]] as BandEnergy,
+        }))
+      : [];
+    return env.concat(this.debugSources);
+  }
+
+  recalcAcoustics(): EnergyField {
+    this.energyField = this.acoustics.recalc(this.activeSoundEvents());
+    return this.energyField;
+  }
+
+  /** 清除全部声源（含固定环境源），并立即重算为空能量场。 */
+  clearSources(): void {
+    this.fixedSourcesEnabled = false;
+    this.debugSources = [];
+    this.recalcAcoustics();
+  }
+
+  /** 添加一个会话级调试声源；校验非法输入后立即重算。 */
+  emitSource(pos: unknown, power: unknown = [1, 1, 1], dir?: unknown): void {
+    const cpos = coerceSourcePos(pos);
+    const cpower = coerceSourcePower(power);
+    const cdir = dir === undefined ? undefined : coerceSourceDir(dir);
+    this.debugSources.push({
+      kind: 'debug',
+      pos: cpos,
+      power: cpower,
+      ...(cdir ? { dir: cdir } : {}),
+    });
+    this.recalcAcoustics();
+  }
+
+  /** 调谐声学全局缩放（仅会话级）；非法/非有限值抛中文错误。 */
+  setTuning(patch: unknown): void {
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+      throw new Error('setTuning: 参数需为调谐对象');
+    }
+    const p = patch as Record<string, unknown>;
+    const cleaned: Partial<AcousticTuning> = {};
+    const ranges: Array<[keyof AcousticTuning, number, number]> = [
+      ['G_ABSORB', 0.5, 3.0],
+      ['G_TRANS', 0.5, 2.0],
+      ['G_DIST_EXP', 1.0, 3.0],
+      ['G_DIFFRACT', 0, 2.0],
+    ];
+    for (const [key, min, max] of ranges) {
+      const v = p[key];
+      if (v === undefined) continue;
+      if (typeof v !== 'number' || !Number.isFinite(v)) {
+        throw new Error('setTuning: ' + key + ' 必须为有限数');
+      }
+      cleaned[key] = Math.min(max, Math.max(min, v));
+    }
+    this.acoustics.setTuning(cleaned);
+    this.recalcAcoustics();
+  }
+
+  /** 恢复声学全局缩放默认，并立即重算。 */
+  resetTuning(): void {
+    this.acoustics.resetTuning();
+    this.recalcAcoustics();
   }
 
   /* ================= 主循环 ================= */
@@ -342,6 +427,7 @@ export class Game {
     const refund = BREAK_REFUND;
     this.inventory[material] = Math.max(0, this.inventory[material]) + refund;
     this.uiNotice = null; // 成功移除时清除旧的失败提示（QA Mn4）
+    this.recalcAcoustics();
     this.autoSave();
   }
 
@@ -409,6 +495,7 @@ export class Game {
     this.world.putBlock(placeCell, id, dur);
     this.inventory[id] -= 1;
     this.uiNotice = null;
+    this.recalcAcoustics();
     this.autoSave();
     return { ok: true, reason: 'ok' };
   }
@@ -492,6 +579,7 @@ export class Game {
     this.nextFacilityId += 1;
     this.inventory[itemId] -= 1;
     this.uiNotice = null;
+    this.recalcAcoustics();
     this.autoSave();
     return { ok: true, reason: 'ok' };
   }
@@ -509,6 +597,7 @@ export class Game {
       return { ok: false, reason: res.reason };
     }
     this.uiNotice = null;
+    this.recalcAcoustics();
     this.autoSave();
     return { ok: true, reason: 'ok' };
   }
@@ -528,6 +617,7 @@ export class Game {
     const itemId = facilityItemIdForKind(res.value!.kind);
     this.inventory[itemId] += 1;
     this.uiNotice = null;
+    this.recalcAcoustics();
     this.autoSave();
     return { ok: true, reason: 'ok' };
   }
@@ -683,6 +773,7 @@ export class Game {
     // 时钟快照同样对齐，避免载入后立刻触发无意义写档。
     this.clock.markSaved();
     this.nextFacilityId = this.world.facilityStates().reduce((mx, f) => Math.max(mx, f.id), 0) + 1;
+    this.recalcAcoustics();
     this.loadNotice = null;
     return 'loaded';
   }
@@ -761,6 +852,11 @@ export class Game {
       target: [this.spawn[0] + 0.5, this.spawn[1] + 2, this.spawn[2] + 0.5],
     };
     this.nextFacilityId = 1;
+    // S4：reset 恢复固定环境源、清空调试源、恢复默认调谐并重算能量场。
+    this.fixedSourcesEnabled = true;
+    this.debugSources = [];
+    this.acoustics.resetTuning();
+    this.recalcAcoustics();
     this.cancelMining();
     this.autoSave();
   }
@@ -770,6 +866,7 @@ export class Game {
     this.seed = next.seed;
     this.spawn = next.spawn;
     this.soundSources = next.soundSources;
+    this.acoustics.setWorld(this.world);
     this.body = makeBodyAtSpawn(next.spawn, this.world);
     this.nextFacilityId = 1;
     this.orbit.target = [this.body.pos[0], this.body.pos[1] + 2, this.body.pos[2]];
@@ -778,6 +875,58 @@ export class Game {
     this.uiNotice = null;
     this.loadNotice = null;
   }
+}
+
+/** S4：把任意输入坐标夹取为有限源格坐标；非法抛中文错误。 */
+function coerceSourcePos(pos: unknown): XYZA {
+  if (!Array.isArray(pos) || pos.length !== 3) {
+    throw new Error('emitSource: pos 需为 [x,y,z] 三元素数组');
+  }
+  const [x, y, z] = pos as unknown[];
+  if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') {
+    throw new Error('emitSource: pos 坐标必须为数字');
+  }
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+    throw new Error('emitSource: pos 坐标必须为有限数');
+  }
+  return [Math.floor(x), Math.floor(y), Math.floor(z)];
+}
+
+/** S4：功率谱校验；缺省 [1,1,1]。 */
+function coerceSourcePower(power: unknown): BandEnergy {
+  if (power === undefined) return [1, 1, 1];
+  if (!Array.isArray(power) || power.length !== 3) {
+    throw new Error('emitSource: power 需为 [低,中,高] 三元素数组');
+  }
+  const [a, b, c] = power as unknown[];
+  if (typeof a !== 'number' || typeof b !== 'number' || typeof c !== 'number') {
+    throw new Error('emitSource: power 必须为数字');
+  }
+  if (!Number.isFinite(a) || !Number.isFinite(b) || !Number.isFinite(c)) {
+    throw new Error('emitSource: power 必须为有限数');
+  }
+  if (a < 0 || b < 0 || c < 0) {
+    throw new Error('emitSource: power 不能为负数');
+  }
+  return [a, b, c];
+}
+
+/** S4：方向向量校验；非法抛中文错误。 */
+function coerceSourceDir(dir: unknown): XYZA {
+  if (!Array.isArray(dir) || dir.length !== 3) {
+    throw new Error('emitSource: dir 需为 [x,y,z] 三元素数组');
+  }
+  const [x, y, z] = dir as unknown[];
+  if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') {
+    throw new Error('emitSource: dir 必须为数字');
+  }
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+    throw new Error('emitSource: dir 必须为有限数');
+  }
+  if (x === 0 && y === 0 && z === 0) {
+    throw new Error('emitSource: dir 不能为零向量');
+  }
+  return [x, y, z];
 }
 
 /** 出生点 → 玩家脚底浮点坐标（格中心，头顶留空气） */

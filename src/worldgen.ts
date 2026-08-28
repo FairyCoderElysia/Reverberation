@@ -195,6 +195,12 @@ export function generateWorld(seed: number): GeneratedWorld {
     id: d.id,
     pos: [d.pos[0], d.pos[1], d.pos[2]] as XYZA,
     dominantBand: d.dominantBand,
+    power:
+      d.dominantBand === 0
+        ? ([1, 0.2, 0.1] as [number, number, number])
+        : d.dominantBand === 1
+          ? ([0.2, 1, 0.2] as [number, number, number])
+          : ([0.1, 0.2, 1] as [number, number, number]),
     mineable: false,
   }));
 

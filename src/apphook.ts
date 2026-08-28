@@ -9,7 +9,7 @@ import { mergeTriplet } from './materials';
 import type { MaterialOverrides } from './materials';
 import type { Game } from './game';
 import { DAY_LENGTH_SECONDS, INTERACTION_REACH } from './config';
-import type { FacilityKind, FacilitySnapshot, GraphicTier, OrbitState, PerfState, SoundSource, XYZA } from './types';
+import type { BandEnergy, FacilityKind, FacilitySnapshot, GraphicTier, OrbitState, PerfState, SoundSource, XYZA } from './types';
 import type { BlockRef } from './types';
 import { FACILITY_DEFS, RECIPES } from './recipes';
 
@@ -66,6 +66,11 @@ export interface AppState {
   surfaceHeight: (x: number, z: number) => number;
   surfaceHeights: () => number[];
   getWorldIds: () => Uint8Array;
+  /** S4：能量场唯一读 API（未命中/越界返回 [0,0,0]） */
+  energyField: {
+    sample: (g: XYZA) => BandEnergy;
+    version: number;
+  };
 }
 
 export interface DebugHooks {
@@ -93,6 +98,12 @@ export interface DebugHooks {
   placeFacility: (kind: FacilityKind, cell: XYZA, yaw?: number) => { ok: boolean; reason: string };
   rotateFacility: (cell: XYZA, deltaRadians?: number) => { ok: boolean; reason: string };
   removeFacility: (cell: XYZA) => { ok: boolean; reason: string };
+  // S4 增量
+  emitSource: (pos: XYZA, power?: BandEnergy, dir?: XYZA) => void;
+  clearSources: () => void;
+  recalcAcoustics: () => void;
+  setTuning: (patch: Partial<import('./acoustics').AcousticTuning>) => void;
+  resetTuning: () => void;
 }
 
 export interface __App {
@@ -168,6 +179,7 @@ export function buildApp(
         id: s.id,
         pos: [s.pos[0], s.pos[1], s.pos[2]] as XYZA,
         dominantBand: s.dominantBand,
+        power: [s.power[0], s.power[1], s.power[2]] as [number, number, number],
         mineable: false as const,
       }));
     },
@@ -243,6 +255,14 @@ export function buildApp(
     surfaceHeight: (x, z) => game.world.surfaceHeight(x, z),
     surfaceHeights: () => Array.from(game.world.surfaceH),
     getWorldIds: () => game.world.ids.slice(),
+    get energyField() {
+      return {
+        sample: (g: XYZA) => game.energyField.sample(g),
+        get version() {
+          return game.energyField.version;
+        },
+      };
+    },
   };
 
   const debug: DebugHooks = {
@@ -269,11 +289,13 @@ export function buildApp(
       }
       game.overrides.set(id, next);
       game.rebuildDurability(); // 有效材料表变化后回填已有世界方块（保持非空气格 durability = 当前表值）
+      game.recalcAcoustics(); // 材料参数变化后声场立即反映新参数
       onMaterialChange();
     },
     resetMaterials: () => {
       game.overrides.clear();
       game.rebuildDurability();
+      game.recalcAcoustics();
       onMaterialChange();
     },
     setGraphicTier: (t: GraphicTier) => {
@@ -323,6 +345,21 @@ export function buildApp(
     },
     removeFacility: (cell) => {
       return game.removeFacility(cell);
+    },
+    emitSource: (pos, power, dir) => {
+      game.emitSource(pos, power, dir);
+    },
+    clearSources: () => {
+      game.clearSources();
+    },
+    recalcAcoustics: () => {
+      game.recalcAcoustics();
+    },
+    setTuning: (patch) => {
+      game.setTuning(patch);
+    },
+    resetTuning: () => {
+      game.resetTuning();
     },
   };
 

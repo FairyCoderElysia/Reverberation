@@ -1,6 +1,6 @@
 # Voice · 声学沙盒生存（3D 体素 Web 单机）
 
-浏览器端 3D 体素「声学沙盒生存」游戏原型。当前为 **Sprint 3：轨道俯瞰 + 合成/设施基础 + 最小时钟/存档 v2**。
+浏览器端 3D 体素「声学沙盒生存」游戏原型。当前为 **Sprint 4：三频几何声学传播内核 + 能量场采样**。
 
 - 技术栈：Vite + TypeScript（strict）+ Three.js（WebGL2）+ Vitest
 - 无后端、无外部网络依赖（全程离线可玩）。
@@ -14,6 +14,7 @@
 │  ├─ main.ts            # 启动编排（载档→生成世界→渲染→输入绑定→__app→循环）
 │  ├─ config.ts          # 可调参数常量（唯一来源，含 S2/S3 玩家物理/交互/存档/时钟常量）
 │  ├─ materials.ts       # M2 材料表（唯一数据源，tech-design §3.1）
+│  ├─ acoustics.ts       # M3 三频几何声学传播内核（S4）
 │  ├─ recipes.ts         # S3 配方/物品/设施定义（唯一数据源）
 │  ├─ theme.ts           # 调色板单一常量源（材质 7 色 + 频段 3 色 + 设施色）
 │  ├─ rng.ts             # 确定性种子 RNG（世界生成禁用 Math.random）
@@ -66,13 +67,15 @@ npm run build      # tsc --noEmit + vite build
   `timeOfDay` / `day` / `dayLengthSeconds` / `recipes` / `facilityDefs` / `facilities` /
   `inventory`（13 长度）/ `selected` / `placedBlocks` / `miningProgress` / `interactionReach` /
   `lastSavedAt` / `saveError` / `loadNotice` / `uiNotice` / `perf` / `blockAt(g)` /
-  `surfaceHeight(x,z)` / `surfaceHeights()`
+  `surfaceHeight(x,z)` / `surfaceHeights()` / `energyField.sample(g)` / `energyField.version`
 - `reset()`：等价「新游戏」（换新种子 + 重置运行态 + 立即覆盖存档）
 - `debug`：`regenerate(seed)` / `setMaterial(id,patch)` / `resetMaterials()` /
   `setGraphicTier('high'|'low')` / `benchRay(opts)` / `findMaterialBlocks(id)` /
   `giveItem(id,n)`（1..12）/ `teleport(pos)` / `saveNow()` / `loadSave()` / `clearSave()` /
   `setViewMode('first'|'orbit')` / `setOrbit(patch)` / `craft(recipeId)` /
-  `placeFacility(kind,cell,yaw?)` / `rotateFacility(cell,deltaRadians?)` / `removeFacility(cell)`
+  `placeFacility(kind,cell,yaw?)` / `rotateFacility(cell,deltaRadians?)` / `removeFacility(cell)` /
+  `emitSource(pos,power?,dir?)` / `clearSources()` / `recalcAcoustics()` /
+  `setTuning(patch)` / `resetTuning()`
 
 示例：
 
@@ -87,6 +90,15 @@ window.__app.debug.rotateFacility([20, 18, 20]); // 旋转 π/2
 window.__app.debug.removeFacility([20, 18, 20]);
 window.__app.debug.saveNow();
 ```
+
+## 声学调试
+
+- `state.energyField.sample([x,y,z])` 是能量场唯一读接口，顺序恒为 `[低频, 中频, 高频]`；越界/未命中返回 `[0,0,0]`。
+- `state.energyField.version` 在每次能量场重算后递增。
+- 默认有 3 个固定环境源参与能量场（可在 `state.soundSources` 读到各自的 `power` 三频功率谱）。
+- `debug.clearSources()` 会清空全部声源（含固定环境源）；`debug.emitSource(pos, power?, dir?)` 添加会话级调试声源；`reset()` 恢复默认。
+- `debug.recalcAcoustics()` 手动强制重算；`debug.setTuning(patch)` / `debug.resetTuning()` 调整全局声学缩放（吸收/透射/距离指数/绕射强度）并立即重算。
+- 所有调试声学钩子均会校验输入；非法输入抛中文错误。
 
 ## 降级
 

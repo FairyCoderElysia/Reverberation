@@ -12,6 +12,9 @@ export type Band = 0 | 1 | 2;
 /** 三频系数元组，顺序恒为 [低频, 中频, 高频] */
 export type Triplet = [number, number, number];
 
+/** 三频能量元组，顺序恒为 [低频, 中频, 高频]（声学内核与 UI 通用） */
+export type BandEnergy = [number, number, number];
+
 export type MaterialName =
   | 'foam'
   | 'wood'
@@ -97,6 +100,7 @@ export interface SoundSource {
   id: number;
   pos: XYZA; // 世界格坐标（整数）
   dominantBand: Band; // 0/1/2 各一
+  power: BandEnergy; // 三频功率谱（S4 contract 钉死）
   mineable: false;
 }
 

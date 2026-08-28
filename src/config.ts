@@ -65,3 +65,21 @@ export const SAVE_VERSION = 2;
 export const ORBIT_DEFAULT_DISTANCE = 42;
 export const ORBIT_DEFAULT_YAW = Math.PI * 0.25;
 export const ORBIT_DEFAULT_PITCH = 0.62;
+
+/* ==== Sprint 4 声学参数默认值（tech-design 附录「可调参数默认值总表」；单一来源） ==== */
+
+/** 声学传播默认参数（S4 只使用默认档，F7C 降级后续接入）。 */
+export const ACOUSTIC_DEFAULT_PARAMS = {
+  rays: 128,
+  bounces: 3,
+  diffract: true,
+  fieldThreshold: 0,
+} as const;
+
+/** 声学全局缩放默认值（唯一夸张层；debug.setTuning 可覆写运行时副本）。 */
+export const ACOUSTIC_DEFAULT_TUNING = {
+  G_ABSORB: 1.0,
+  G_TRANS: 1.0,
+  G_DIST_EXP: 2.0,
+  G_DIFFRACT: 1.0,
+} as const;
