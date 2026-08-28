@@ -249,7 +249,7 @@ function bindInput(game: Game, renderer: Renderer): void {
       });
     }
     canvas.addEventListener('click', () => {
-      if (!pointerLocked && document.pointerLockElement !== canvas) {
+      if (!pointerLocked && document.pointerLockElement !== canvas && game.viewMode === 'first') {
         try {
           canvas.requestPointerLock();
         } catch {
