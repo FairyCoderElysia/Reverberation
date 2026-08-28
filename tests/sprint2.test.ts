@@ -233,6 +233,32 @@ describe('Sprint 2 存档回环', () => {
     expect(Array.from(game.world.ids)).toEqual(idsAfter);
   });
 
+  it('clearSave 后紧接 flushSaveForPageHide 不写 localStorage', () => {
+    const storage = memoryStorage();
+    const game = new Game(generateWorld(SEED), { storage, now: () => 1111 });
+    game.giveItem(4, 5); // 先写一次，再清档
+    expect(storage.getItem('voice.save.v1')).not.toBeNull();
+    game.clearSave();
+    expect(storage.getItem('voice.save.v1')).toBeNull();
+    game.flushSaveForPageHide();
+    expect(storage.getItem('voice.save.v1')).toBeNull();
+    // 运行态仍应保持
+    expect(game.inventory[4]).toBe(5);
+  });
+
+  it('清档后执行一次 writeSave，之后 flushSaveForPageHide 会写档', () => {
+    const storage = memoryStorage();
+    const game = new Game(generateWorld(SEED), { storage, now: () => 2222 });
+    game.giveItem(4, 5);
+    game.clearSave();
+    expect(storage.getItem('voice.save.v1')).toBeNull();
+    expect(game.writeSave()).toBe(true);
+    expect(storage.getItem('voice.save.v1')).not.toBeNull();
+    game.flushSaveForPageHide();
+    expect(storage.getItem('voice.save.v1')).not.toBeNull();
+    expect(game.lastSavedAt).toBe(2222);
+  });
+
   it('损坏/版本不兼容存档 → loadSave 返回 invalid 且不抛错、可继续新游戏', () => {
     const storage = memoryStorage();
     storage.setItem('voice.save.v1', '{"version":99,"seed":1}');

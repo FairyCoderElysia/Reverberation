@@ -96,6 +96,8 @@ export class Game {
   private moveAutosaveAccumMs = 0;
   /** 最近一次成功写档时的玩家位置/朝向快照（B 移动自动存档）。 */
   private lastSavedMoveState: [number, number, number, number, number] | null = null;
+  /** clearSave 后抑制 pagehide/beforeunload/visibilitychange 兜底写档，直到下一次成功 writeSave 才恢复。 */
+  private suppressUnloadSave = false;
   mineHeld = false;
   placePressed = false;
 
@@ -356,6 +358,8 @@ export class Game {
       const text = serializeSave(payload);
       writeSaveRaw(this.storage, text);
       this.lastSavedAt = this.now();
+      // 成功写档后恢复页面关闭兜底：clearSave 的抑制只应持续到下一次有效保存。
+      this.suppressUnloadSave = false;
       // 任何成功写档都已持久化当前玩家位置/朝向，因此清除移动待写标记。
       this.moveDirty = false;
       this.moveAutosaveAccumMs = 0;
@@ -405,6 +409,7 @@ export class Game {
 
   /** 页面关闭/隐藏兜底：由 main 的 pagehide/beforeunload/visibilitychange 调用，立即写档。 */
   flushSaveForPageHide(): void {
+    if (this.suppressUnloadSave) return;
     this.writeSave();
   }
 
@@ -496,6 +501,7 @@ export class Game {
     if (!this.storage) return;
     try {
       removeSave(this.storage);
+      this.suppressUnloadSave = true;
     } catch {
       // 忽略：删除失败不影响运行态
     }
