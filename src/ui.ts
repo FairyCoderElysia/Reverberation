@@ -3,7 +3,7 @@
  * 全部数据与 state 同源（材料面板读 effectiveMaterials，库存/配方读 state.inventory/selected），不写状态。
  */
 import { MATERIAL_ZH } from './materials';
-import { FACILITY_ITEM_IDS, itemName } from './recipes';
+import { FACILITY_KIND_BY_ITEM, itemName } from './recipes';
 import type { Recipe } from './recipes';
 import { BAND_COLORS, FACILITY_COLORS, MATERIAL_COLORS } from './theme';
 import type { MaterialSpec } from './types';
@@ -138,11 +138,8 @@ export function renderStatus(message: string | null): void {
 
 function colorFor(id: number): string {
   if (id >= 1 && id <= 7) return MATERIAL_COLORS[id - 1] ?? '#fff';
-  const ids = FACILITY_ITEM_IDS;
-  for (const kind of ['core', 'cannon', 'probe', 'duct', 'relay'] as const) {
-    if (ids[kind] === id) return FACILITY_COLORS[kind] ?? '#fff';
-  }
-  return '#fff';
+  const kind = FACILITY_KIND_BY_ITEM[id];
+  return kind ? FACILITY_COLORS[kind] ?? '#fff' : '#fff';
 }
 
 function legColor(id: number): string {

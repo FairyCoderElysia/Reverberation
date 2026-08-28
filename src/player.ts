@@ -88,7 +88,7 @@ export function isOnGround(world: World, pos: [number, number, number]): boolean
   return top !== null && pos[1] >= top - GROUND_STAND_EPSILON && pos[1] <= top + GROUND_STAND_EPSILON;
 }
 
-function clampPitch(p: number): number {
+export function clampPitch(p: number): number {
   const max = Math.PI * 0.49; // 不翻越上下垂直
   if (p > max) return max;
   if (p < -max) return -max;

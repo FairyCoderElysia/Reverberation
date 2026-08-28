@@ -124,6 +124,14 @@ export function reflectDir(dir: XYZA, n: XYZA): XYZA {
   return [dir[0] - 2 * dot * n[0], dir[1] - 2 * dot * n[1], dir[2] - 2 * dot * n[2]];
 }
 
+function cloneFacilityState(f: FacilityState): FacilityState {
+  return {
+    ...f,
+    linkFrom: f.linkFrom.slice(),
+    linkTo: f.linkTo.slice(),
+  };
+}
+
 export class World {
   readonly size: [number, number, number] = [WORLD_X, WORLD_Y, WORLD_Z];
   ids: Uint8Array;
@@ -159,10 +167,11 @@ export class World {
       return { material: 0, durability: 0, facility: null, placed: false };
     }
     const i = this.idx(x, y, z);
+    const f = this.facilityMap.get(i) ?? null;
     return {
       material: this.ids[i],
       durability: this.durability[i],
-      facility: this.facilityMap.get(i) ?? null,
+      facility: f ? cloneFacilityState(f) : null,
       placed: this.placed[i] === 1,
     };
   }
@@ -229,8 +238,13 @@ export class World {
   /** 放置设施：独占一格，ids/durability 为 0、placed=1、facilityMap 非空。 */
   putFacility(f: FacilityState): void {
     const [x, y, z] = blockCoords(f.pos);
-    if (!inBounds(x, y, z)) return;
+    if (!inBounds(x, y, z)) {
+      throw new Error('putFacility: 目标格越界，禁止写入');
+    }
     const i = this.idx(x, y, z);
+    if (this.ids[i] !== 0 || this.facilityMap.has(i)) {
+      throw new Error('putFacility: 目标格已有方块/设施，禁止无检查覆盖');
+    }
     this.ids[i] = 0;
     this.durability[i] = 0;
     this.placed[i] = 1;

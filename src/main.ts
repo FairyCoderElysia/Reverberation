@@ -6,6 +6,7 @@ import { assertDefaultTableValid, buildApp } from './apphook';
 import type { __App } from './apphook';
 import { generateWorld } from './worldgen';
 import { Game } from './game';
+import { applyLook } from './player';
 import { Renderer } from './render/renderer';
 import { inventorySignature, renderInventory, renderMaterialPanel, renderMiningProgress, renderRecipes, renderStatus, shouldRefreshInventory } from './ui';
 import { LOOK_SENSITIVITY } from './config';
@@ -47,8 +48,7 @@ function bootInner(): void {
   const app: __App = buildApp(
     game,
     (g) => {
-      renderer.rebuildWorld(g.world.ids, g.world.facilityList());
-      renderer.addSourceMarkers(g.soundSources, g.spawn);
+      renderer.rebuildWorld(g.world.ids, g.world.facilityList(), g.soundSources, g.spawn);
       lastWorldRev = g.world.revision;
     },
     () => {
@@ -62,8 +62,7 @@ function bootInner(): void {
   window.__app = app;
 
   // 8. 首帧世界快照 + 面板
-  renderer.rebuildWorld(game.world.ids, game.world.facilityList());
-  renderer.addSourceMarkers(game.soundSources, game.spawn);
+  renderer.rebuildWorld(game.world.ids, game.world.facilityList(), game.soundSources, game.spawn);
   renderMaterialPanel(app.state.materials);
   lastWorldRev = game.world.revision;
 
@@ -98,7 +97,7 @@ function bootInner(): void {
     // 用户实测热修：世界内容在运行时被放置/挖掘等修改后，下一帧立即重建 3D 场景。
     if (game.world.revision !== lastWorldRev) {
       lastWorldRev = game.world.revision;
-      renderer.rebuildWorld(game.world.ids, game.world.facilityList());
+      renderer.rebuildWorld(game.world.ids, game.world.facilityList(), game.soundSources, game.spawn);
     }
     if (game.viewMode === 'orbit') {
       renderer.setOrbitView(game.orbit);
@@ -208,8 +207,7 @@ function bindInput(game: Game, renderer: Renderer): void {
   const DRAG_PLACE_THRESHOLD = 4; // px：右键位移小于此视为「点击放置」
 
   const rotate = (dx: number, dy: number): void => {
-    game.body.yaw -= dx * LOOK_SENSITIVITY;
-    game.body.pitch = clampPitch(game.body.pitch - dy * LOOK_SENSITIVITY);
+    applyLook(game.body, dx, dy, LOOK_SENSITIVITY);
   };
 
   if (canvas) {
@@ -327,13 +325,6 @@ function bindInput(game: Game, renderer: Renderer): void {
   document.addEventListener('pointerlockerror', () => {
     pointerLocked = false;
   });
-}
-
-function clampPitch(p: number): number {
-  const max = Math.PI * 0.49;
-  if (p > max) return max;
-  if (p < -max) return -max;
-  return p;
 }
 
 function showNoGlFallback(): void {

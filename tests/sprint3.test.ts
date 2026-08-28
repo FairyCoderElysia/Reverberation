@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { buildApp } from '../src/apphook';
 import { Game, memoryStorage } from '../src/game';
 import { generateWorld } from '../src/worldgen';
-import { encodeRle } from '../src/save';
+import { encodeRle, parseSave } from '../src/save';
 import { DAY_LENGTH_SECONDS } from '../src/config';
 import { pickBlock } from '../src/pick';
 import { FACILITY_DEFS, RECIPES } from '../src/recipes';
@@ -116,6 +116,29 @@ describe('S3 设施基础（F5.3）', () => {
     expect(app.state.placedBlocks).toBe(1);
   });
 
+  it('placeFacility 拒绝非有限 yaw 并抛中文错误', () => {
+    const { app, game } = makeApp();
+    game.giveItem(8, 1);
+    expect(() => app.debug.placeFacility('core', [10, 18, 10], Number.NaN)).toThrow(/yaw.*有限数/);
+    expect(game.inventory[8]).toBe(1); // 抛出后库存不变
+  });
+
+  it('state.blockAt().facility 对外快照不泄漏内部活引用', () => {
+    const { app, game } = makeApp();
+    game.giveItem(8, 1);
+    const cell: [number, number, number] = [13, 18, 13];
+    expect(game.placeFacility('core', cell, 0).ok).toBe(true);
+    const external = app.state.blockAt(cell).facility;
+    expect(external).not.toBeNull();
+    external!.yaw = 999;
+    external!.linkFrom.push(12345);
+    const internal = game.world.facilityStates()[0];
+    expect(internal.yaw).toBe(0);
+    expect(internal.linkFrom).toEqual([]);
+    // 再次获取仍是副本，不受污染
+    expect(app.state.blockAt(cell).facility!.yaw).toBe(0);
+  });
+
   it('rotateFacility 缺省步长 π/2 且归一化；removeFacility 返还物品并清格', () => {
     const { app, game } = makeApp();
     game.giveItem(9, 1);
@@ -202,11 +225,40 @@ describe('S3 存档 v2 与迁移', () => {
     expect(g2.facilitySnapshots()).toEqual([]);
     expect(g2.timeOfDay).toBe(0);
     expect(g2.day).toBe(0);
+    // Minor #11：v1 迁移必须保留世界 ids/placed 与玩家位置
+    expect(Array.from(g2.world.ids)).toEqual(Array.from(g1.world.ids));
+    expect(Array.from(g2.world.placed)).toEqual(Array.from(g1.world.placed));
+    expect(g2.playerPos).toEqual(g1.playerPos);
 
     // 下次写档版本为 2
     g2.writeSave();
     const raw = JSON.parse(storage.getItem('voice.save.v1')!) as Record<string, unknown>;
     expect(raw.version).toBe(2);
+  });
+
+  it('parseFacilities 拒绝非整数/越界 cell（Minor #10）', () => {
+    const ids = new Uint8Array(98304);
+    const placed = new Uint8Array(98304);
+    const base = {
+      version: 2,
+      seed: 1,
+      idsB64: encodeRle(ids),
+      placedB64: encodeRle(placed),
+      inventory: new Array(13).fill(0),
+      selected: 1,
+      playerPos: [32, 12, 32],
+      playerYaw: 0,
+      playerPitch: 0,
+      timeOfDay: 0,
+      day: 0,
+      savedAt: 0,
+    };
+    const badFloat = parseSave(JSON.stringify({ ...base, facilities: [{ cell: [32.5, 12, 32], kind: 'core', yaw: 0 }] }));
+    expect(badFloat.ok).toBe(false);
+    const badOut = parseSave(JSON.stringify({ ...base, facilities: [{ cell: [64, 12, 32], kind: 'core', yaw: 0 }] }));
+    expect(badOut.ok).toBe(false);
+    const good = parseSave(JSON.stringify({ ...base, facilities: [{ cell: [32, 12, 32], kind: 'core', yaw: 0 }] }));
+    expect(good.ok).toBe(true);
   });
 
   it('设施占格 placedBlocks 与 placed 数组同源（含设施）', () => {

@@ -10,12 +10,22 @@ import { pickBlock, placeCellFromHit } from './pick';
 import type { PickHit } from './pick';
 import { parseSave, readSaveRaw, removeSave, serializeSave, writeSaveRaw } from './save';
 import type { SavePayload, StorageLike } from './save';
-import { FACILITY_ITEM_IDS, FACILITY_KIND_BY_ITEM, RECIPES, isFacilityKind, itemName } from './recipes';
+import { RECIPES, isFacilityKind, itemName } from './recipes';
+import { GameClock } from './clock';
+import {
+  assertFiniteYaw,
+  cellOverlapsPlayer,
+  coerceFacilityCell,
+  facilityItemIdForKind,
+  facilityKindForItem,
+  tryPlaceFacility,
+  tryRotateFacility,
+  tryRemoveFacility,
+} from './facility';
 import { findStandingSpawn, generateWorld } from './worldgen';
 import type { GeneratedWorld } from './worldgen';
 import {
   AUTOSAVE_MOVE_INTERVAL_MS,
-  DAY_LENGTH_SECONDS,
   INTERACTION_REACH,
   JUMP_BUFFER_MS,
   MINING_SECONDS,
@@ -24,8 +34,6 @@ import {
   ORBIT_DEFAULT_YAW,
   PLAYER_PHYS_HZ,
   PLAYER_EYE_HEIGHT,
-  PLAYER_HALF_WIDTH,
-  PLAYER_HEIGHT,
   SAVE_SIZE_WARN_BYTES,
   SAVE_VERSION,
 } from './config';
@@ -98,17 +106,27 @@ export class Game {
     target: [32.5, 13, 32.5],
   };
   /** S3：全天相位 [0,1)，从 0 开始随现实时间递增；回绕时 day+1。 */
-  timeOfDay = 0;
+  get timeOfDay(): number {
+    return this.clock.timeOfDay;
+  }
+
+  set timeOfDay(v: number) {
+    this.clock.timeOfDay = v;
+  }
+
   /** S3：存活天数（从 0 开始）。 */
-  day = 0;
+  get day(): number {
+    return this.clock.day;
+  }
+
+  set day(v: number) {
+    this.clock.day = v;
+  }
+
+  /** S3：最小化时钟（推进/回绕/节流待写状态集中在 clock.ts）。 */
+  private readonly clock: GameClock;
   /** S3：设施内部 id 分配器（载入后基于已有设施最大 id +1）。 */
   nextFacilityId = 1;
-  /** 时钟相对最近一次成功写档是否有变化（S3 静止也节流写档）。 */
-  private clockDirty = false;
-  /** 自上次成功写档后累计的时钟节流毫秒数。 */
-  private clockAutosaveAccumMs = 0;
-  /** 最近一次成功写档时的 [timeOfDay, day] 快照（S3 时钟自动存档）。 */
-  private lastSavedClockSnapshot: [number, number] | null = null;
 
   overrides: Map<number, MaterialOverrides>;
   private seedCounter: number;
@@ -141,7 +159,7 @@ export class Game {
     this.inventory = new Array(13).fill(0) as number[];
     this.selected = 1;
     this.orbit.target = [this.spawn[0] + 0.5, this.spawn[1] + 2, this.spawn[2] + 0.5];
-    this.lastSavedClockSnapshot = this.clockTuple();
+    this.clock = new GameClock();
     this.miningProgress = 0;
     this.miningTarget = null;
     this.lastSavedAt = 0;
@@ -195,9 +213,11 @@ export class Game {
       stepPlayer(this.body, physInput, 1 / PLAYER_PHYS_HZ, this.world);
       this.jumpBufferMs = physInput.jumpBufferMs ?? 0;
     }
-    this.advanceClock(dt);
+    this.clock.advance(dt);
     this.updateMoveAutoSave(dt);
-    this.updateClockAutoSave(dt);
+    if (this.clock.updateAutoSave(dt, AUTOSAVE_MOVE_INTERVAL_MS)) {
+      this.autoSave();
+    }
     this.updateMining(dt / 1000);
     if (this.placePressed) {
       this.placePressed = false;
@@ -378,7 +398,11 @@ export class Game {
       return { ok: false, reason: '不能放置到玩家身体内' };
     }
     if (id >= 8 && id <= 12) {
-      const kind = FACILITY_KIND_BY_ITEM[id];
+      const kind = facilityKindForItem(id);
+      if (!kind) {
+        this.uiNotice = '设施物品 id 非法，无法放置';
+        return { ok: false, reason: '设施物品 id 非法' };
+      }
       return this.placeFacilityAtCell(kind, placeCell, 0);
     }
     const dur = this.materialSpecs()[id - 1].durability;
@@ -440,49 +464,32 @@ export class Game {
     return this.world.facilityList();
   }
 
-  /** 调试/UI 放置设施（kind 必须合法；cell 为整数格；yaw 弧度缺省 0）。 */
+  /** 调试/UI 放置设施（kind 必须合法；cell 为整数格；yaw 弧度缺省 0；yaw 非法抛错）。 */
   placeFacility(kind: FacilityKind, cell: XYZA, yaw = 0): { ok: boolean; reason: string } {
     if (!isFacilityKind(kind)) {
       return { ok: false, reason: '设施类型非法' };
     }
-    if (!cell || !Array.isArray(cell) || cell.length !== 3 || cell.some((v) => !Number.isFinite(v))) {
+    const cc = coerceFacilityCell(cell);
+    if (!cc) {
+      this.uiNotice = '设施坐标非法，无法放置';
       return { ok: false, reason: '设施坐标非法' };
     }
-    return this.placeFacilityAtCell(kind, [Math.floor(cell[0]), Math.floor(cell[1]), Math.floor(cell[2])], yaw);
+    return this.placeFacilityAtCell(kind, cc, yaw);
   }
 
   private placeFacilityAtCell(kind: FacilityKind, cell: XYZA, yaw: number): { ok: boolean; reason: string } {
-    if (!inBounds(cell[0], cell[1], cell[2])) {
-      this.uiNotice = '目标格越界，无法放置设施';
-      return { ok: false, reason: '目标格越界' };
-    }
-    if (this.world.blockAt(cell).material !== 0 || this.world.blockAt(cell).facility !== null) {
-      this.uiNotice = '目标格已有方块/设施，无法放置设施';
-      return { ok: false, reason: '目标格已有方块' };
-    }
-    if (cellOverlapsPlayer(this.body.pos, cell)) {
-      this.uiNotice = '不能放置到玩家身体内';
-      return { ok: false, reason: '不能放置到玩家身体内' };
-    }
-    const itemId = FACILITY_ITEM_IDS[kind];
+    assertFiniteYaw(yaw);
+    const itemId = facilityItemIdForKind(kind);
     if ((this.inventory[itemId] ?? 0) <= 0) {
       this.uiNotice = '库存不足：无法放置「' + itemName(itemId) + '」';
       return { ok: false, reason: '库存不足' };
     }
-    const i = this.world.idx(cell[0], cell[1], cell[2]);
-    const f = {
-      id: this.nextFacilityId++,
-      kind,
-      pos: i,
-      yaw: normalizeYaw(yaw),
-      energy: 0,
-      coreHp: 0,
-      band: 3 as const,
-      linkFrom: [],
-      linkTo: [],
-      busState: 'idle' as const,
-    };
-    this.world.putFacility(f);
+    const res = tryPlaceFacility(this.world, kind, cell, yaw, this.nextFacilityId, this.body.pos);
+    if (!res.ok) {
+      this.uiNotice = res.reason;
+      return { ok: false, reason: res.reason };
+    }
+    this.nextFacilityId += 1;
     this.inventory[itemId] -= 1;
     this.uiNotice = null;
     this.autoSave();
@@ -491,21 +498,16 @@ export class Game {
 
   /** 调试/UI 旋转设施（缺省步长 π/2）。 */
   rotateFacility(cell: XYZA, deltaRadians = Math.PI / 2): { ok: boolean; reason: string } {
-    if (!cell || !Array.isArray(cell) || cell.length !== 3 || cell.some((v) => !Number.isFinite(v))) {
+    const cc = coerceFacilityCell(cell);
+    if (!cc) {
       this.uiNotice = '设施坐标非法，无法旋转';
       return { ok: false, reason: '设施坐标非法' };
     }
-    const cc: XYZA = [Math.floor(cell[0]), Math.floor(cell[1]), Math.floor(cell[2])];
-    const b = this.world.blockAt(cc);
-    if (!b.facility) {
-      this.uiNotice = '目标格没有设施，无法旋转';
-      return { ok: false, reason: '目标格没有设施' };
+    const res = tryRotateFacility(this.world, cc, deltaRadians);
+    if (!res.ok) {
+      this.uiNotice = res.reason;
+      return { ok: false, reason: res.reason };
     }
-    if (!Number.isFinite(deltaRadians)) {
-      throw new Error('rotateFacility: deltaRadians 必须为有限数');
-    }
-    const nextYaw = normalizeYaw(b.facility.yaw + deltaRadians);
-    this.world.updateFacilityYaw(cc, nextYaw);
     this.uiNotice = null;
     this.autoSave();
     return { ok: true, reason: 'ok' };
@@ -513,17 +515,17 @@ export class Game {
 
   /** 拆除设施（返还对应设施物品 id 8..12；S3 临时口径）。 */
   removeFacility(cell: XYZA): { ok: boolean; reason: string } {
-    if (!cell || !Array.isArray(cell) || cell.length !== 3 || cell.some((v) => !Number.isFinite(v))) {
+    const cc = coerceFacilityCell(cell);
+    if (!cc) {
       this.uiNotice = '设施坐标非法，无法拆除';
       return { ok: false, reason: '设施坐标非法' };
     }
-    const cc: XYZA = [Math.floor(cell[0]), Math.floor(cell[1]), Math.floor(cell[2])];
-    const removed = this.world.removeFacilityAt(cc);
-    if (!removed) {
-      this.uiNotice = '目标格没有设施，无法拆除';
-      return { ok: false, reason: '目标格没有设施' };
+    const res = tryRemoveFacility(this.world, cc);
+    if (!res.ok) {
+      this.uiNotice = res.reason;
+      return { ok: false, reason: res.reason };
     }
-    const itemId = FACILITY_ITEM_IDS[removed.kind];
+    const itemId = facilityItemIdForKind(res.value!.kind);
     this.inventory[itemId] += 1;
     this.uiNotice = null;
     this.autoSave();
@@ -540,43 +542,7 @@ export class Game {
     return this.rotateFacility(hit.cell, Math.PI / 2);
   }
 
-  /* ================= 时钟 ================= */
-
-  private clockTuple(): [number, number] {
-    return [this.timeOfDay, this.day];
-  }
-
-  /** 用现实时间推进全天相位；跨过 1 时 day+1。 */
-  private advanceClock(dtMs: number): void {
-    if (!Number.isFinite(dtMs) || dtMs <= 0) return;
-    this.timeOfDay += dtMs / (DAY_LENGTH_SECONDS * 1000);
-    let guard = 0;
-    while (this.timeOfDay >= 1 && guard < 10000) {
-      this.timeOfDay -= 1;
-      this.day += 1;
-      guard += 1;
-    }
-    if (this.timeOfDay < 0 || this.timeOfDay >= 1) this.timeOfDay = 0; // 防御性归位
-  }
-
-  /** 时钟节流写档：静止时 timeOfDay 也在变化，因此同样要保存。 */
-  private updateClockAutoSave(dtMs: number): void {
-    if (!this.clockDirty) {
-      const cur = this.clockTuple();
-      const prev = this.lastSavedClockSnapshot;
-      if (prev === null || cur[0] !== prev[0] || cur[1] !== prev[1]) {
-        this.clockDirty = true;
-      }
-    }
-    if (!this.clockDirty) {
-      this.clockAutosaveAccumMs = 0;
-      return;
-    }
-    this.clockAutosaveAccumMs += dtMs;
-    if (this.clockAutosaveAccumMs >= AUTOSAVE_MOVE_INTERVAL_MS) {
-      this.autoSave();
-    }
-  }
+  /* ================= 时钟（逻辑已拆至 src/clock.ts） ================= */
 
   /* ================= 存档 ================= */
 
@@ -612,9 +578,7 @@ export class Game {
       this.moveAutosaveAccumMs = 0;
       this.lastSavedMoveState = this.moveStateTuple();
       // S3：成功写档同时清除时钟待写标记（静止时 timeOfDay 也会周期落盘）。
-      this.clockDirty = false;
-      this.clockAutosaveAccumMs = 0;
-      this.lastSavedClockSnapshot = this.clockTuple();
+      this.clock.markSaved();
       this.saveError = null;
       // 体积预警（不阻塞）：序列化结果超阈值时在状态行提示
       if (text.length > SAVE_SIZE_WARN_BYTES) {
@@ -625,6 +589,9 @@ export class Game {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.saveError = '自动保存失败：' + msg + '。可能是隐私模式或存储已满；游戏仍可继续。';
+      // 失败时复位节流累计，避免每帧重复写档；待写脏标记保留，下一周期再重试。
+      this.moveAutosaveAccumMs = 0;
+      this.clock.backoff();
       return false;
     }
   }
@@ -705,6 +672,8 @@ export class Game {
       grounded: false,
     };
     this.snapPlayerToAir();
+    // 载入成功后把俯瞰中心同步到当前玩家位置，避免旧世界出生点残留。
+    this.orbit.target = [this.body.pos[0], this.body.pos[1] + 2, this.body.pos[2]];
     this.cancelMining();
     this.jumpBufferMs = 0;
     // 载入后把移动快照对齐到已恢复位置，避免无移动也触发节流写档。
@@ -712,9 +681,7 @@ export class Game {
     this.moveAutosaveAccumMs = 0;
     this.lastSavedMoveState = this.moveStateTuple();
     // 时钟快照同样对齐，避免载入后立刻触发无意义写档。
-    this.clockDirty = false;
-    this.clockAutosaveAccumMs = 0;
-    this.lastSavedClockSnapshot = this.clockTuple();
+    this.clock.markSaved();
     this.nextFacilityId = this.world.facilityStates().reduce((mx, f) => Math.max(mx, f.id), 0) + 1;
     this.loadNotice = null;
     return 'loaded';
@@ -785,6 +752,7 @@ export class Game {
     this.selected = 1;
     this.timeOfDay = 0;
     this.day = 0;
+    this.clock.reset(0, 0);
     this.viewMode = 'first';
     this.orbit = {
       distance: ORBIT_DEFAULT_DISTANCE,
@@ -804,6 +772,7 @@ export class Game {
     this.soundSources = next.soundSources;
     this.body = makeBodyAtSpawn(next.spawn, this.world);
     this.nextFacilityId = 1;
+    this.orbit.target = [this.body.pos[0], this.body.pos[1] + 2, this.body.pos[2]];
     this.cancelMining();
     this.jumpBufferMs = 0;
     this.uiNotice = null;
@@ -826,28 +795,3 @@ function makeBodyAtSpawn(spawn: XYZA, world: World): PlayerBody {
   return { pos, vel: [0, 0, 0], yaw: 0, pitch: 0, grounded: false };
 }
 
-/** yaw 归一化：保留浮点但在 [0, 2π) 内稳定，同一结果不因多次旋转漂移。 */
-function normalizeYaw(yaw: number): number {
-  if (!Number.isFinite(yaw)) return 0;
-  const twoPi = Math.PI * 2;
-  let v = yaw % twoPi;
-  if (v < 0) v += twoPi;
-  return v;
-}
-
-/** placeCell（单位方块）是否与玩家 AABB 相交（防止把方块放进身体里） */
-function cellOverlapsPlayer(
-  playerPos: [number, number, number],
-  cell: [number, number, number],
-): boolean {
-  const [cx, cy, cz] = cell;
-  const [px, py, pz] = playerPos;
-  return (
-    cx + 1 > px - PLAYER_HALF_WIDTH &&
-    cx < px + PLAYER_HALF_WIDTH &&
-    cy + 1 > py &&
-    cy < py + PLAYER_HEIGHT &&
-    cz + 1 > pz - PLAYER_HALF_WIDTH &&
-    cz < pz + PLAYER_HALF_WIDTH
-  );
-}

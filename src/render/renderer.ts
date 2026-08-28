@@ -97,7 +97,12 @@ export class Renderer {
     this.camera.lookAt(orbit.target[0], orbit.target[1], orbit.target[2]);
   }
 
-  rebuildWorld(worldIds: Uint8Array, facilities: FacilitySnapshot[] = []): void {
+  rebuildWorld(
+    worldIds: Uint8Array,
+    facilities: FacilitySnapshot[] = [],
+    sources: SoundSource[] = [],
+    spawn?: XYZA,
+  ): void {
     if (!this.renderer) return;
     for (const m of this.meshes) {
       this.scene.remove(m);
@@ -111,7 +116,16 @@ export class Renderer {
       (f.material as THREE.Material).dispose();
     }
     this.facilityMeshes = [];
-    for (const mk of this.markers) this.scene.remove(mk);
+    for (const mk of this.markers) {
+      this.scene.remove(mk);
+      const maybeMesh = mk as THREE.Mesh<THREE.BufferGeometry, THREE.Material | THREE.Material[]>;
+      maybeMesh.geometry?.dispose();
+      if (Array.isArray(maybeMesh.material)) {
+        for (const mat of maybeMesh.material) mat.dispose();
+      } else {
+        maybeMesh.material?.dispose();
+      }
+    }
     this.markers = [];
 
     // 索引公式与世界尺寸单一来源（Code-M2）：从 world.ts 导入，禁止在此硬编码
@@ -180,6 +194,12 @@ export class Renderer {
       this.facilityMeshes.push(mesh);
     }
     this.instances = total;
+
+    // Major #1：markers 与方块网格同属“世界重建”职责；在此统一重建可避免
+    // 运行时首次 world revision 后声源/出生点标记消失，也避免 main.ts 散落两处。
+    if (sources.length > 0 || spawn) {
+      this.addSourceMarkers(sources, spawn ?? [0, 0, 0]);
+    }
   }
 
   addSourceMarkers(sources: SoundSource[], spawn: XYZA): void {

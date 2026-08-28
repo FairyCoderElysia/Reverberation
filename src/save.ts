@@ -6,6 +6,7 @@
  * 损坏 / 版本 0、3+ 仍按 invalid 处理并中文提示，不白屏。
  */
 import { SAVE_KEY, SAVE_VERSION } from './config';
+import { WORLD_X, WORLD_Y, WORLD_Z } from './world';
 import type { FacilitySnapshot, FacilityKind } from './types';
 
 /** 可注入存储（浏览器为 localStorage；测试可用内存 Map 替代）。 */
@@ -96,7 +97,21 @@ function parseFacilities(raw: unknown): FacilitySnapshot[] | null {
     if (!item || typeof item !== 'object') return null;
     const o = item as Record<string, unknown>;
     const cell = o.cell;
-    if (!Array.isArray(cell) || cell.length !== 3 || !finite(cell[0]) || !finite(cell[1]) || !finite(cell[2])) return null;
+    if (
+      !Array.isArray(cell) ||
+      cell.length !== 3 ||
+      !Number.isInteger(cell[0]) ||
+      !Number.isInteger(cell[1]) ||
+      !Number.isInteger(cell[2]) ||
+      !(
+        (cell[0] as number) >= 0 &&
+        (cell[0] as number) < WORLD_X &&
+        (cell[1] as number) >= 0 &&
+        (cell[1] as number) < WORLD_Y &&
+        (cell[2] as number) >= 0 &&
+        (cell[2] as number) < WORLD_Z
+      )
+    ) return null;
     if (!validFacilityKind(o.kind)) return null;
     if (!finite(o.yaw)) return null;
     out.push({

@@ -72,6 +72,24 @@ describe('索引公式单一来源（Code-M2）', () => {
 });
 
 describe('世界版本号（用户实测热修：即时渲染跟踪）', () => {
+  it('putFacility 拒绝覆盖已有方块/设施（Minor #9）', () => {
+    const w = new World();
+    w.putBlock([0, 0, 0], 1, 30);
+    const f = {
+      id: 1,
+      kind: 'core' as const,
+      pos: w.idx(0, 0, 0),
+      yaw: 0,
+      energy: 0,
+      coreHp: 0,
+      band: 3 as const,
+      linkFrom: [],
+      linkTo: [],
+      busState: 'idle' as const,
+    };
+    expect(() => w.putFacility(f)).toThrow(/已有方块|禁止无检查覆盖/);
+  });
+
   it('putBlock/removeBlock 每次修改 ids 都递增 revision，供渲染器按帧检测', () => {
     const w = new World();
     expect(w.revision).toBe(0);

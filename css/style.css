@@ -230,6 +230,8 @@ html, body {
   left: 50%;
   transform: translateX(-50%);
   z-index: 8;
+  /* QA Minor：父级 .hud 是 pointer-events:none，按钮必须显式恢复可点击 */
+  pointer-events: auto;
   background: rgba(10, 18, 32, 0.86);
   border: 1px solid var(--line);
   color: var(--fg);
