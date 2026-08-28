@@ -27,6 +27,8 @@ export interface PlayerInput {
   forward: number; // +1 前进 -1 后退
   right: number; // +1 右移 -1 左移
   jump: boolean;
+  /** 可选：跳跃缓冲剩余毫秒；由 Game.tickFrame 从 Game.jumpBufferMs 注入，stepPlayer 在固定步内消费/递减。 */
+  jumpBufferMs?: number;
 }
 
 /** 视线方向（yaw/pitch → 单位向量，供拾取射线用）。注意：yaw 约定为绕 Y，yaw=0 朝 -Z。 */
@@ -120,6 +122,15 @@ export function stepPlayer(
     body.grounded = false;
   }
 
+  // 5b. 跳跃缓冲：步首已经 grounded 时立即消费（快速点按可当步起跳）。
+  if (input.jumpBufferMs !== undefined && input.jumpBufferMs > 0 && body.grounded) {
+    input.jumpBufferMs = 0;
+    if (!input.jump) {
+      body.vel[1] = PLAYER_JUMP_SPEED;
+      body.grounded = false;
+    }
+  }
+
   // 6. Y 轴
   const ny = body.pos[1] + body.vel[1] * dt;
   if (!aabbIntersects(world, [body.pos[0], ny, body.pos[2]])) {
@@ -127,6 +138,19 @@ export function stepPlayer(
   } else {
     if (body.vel[1] < 0) body.grounded = true;
     body.vel[1] = 0;
+  }
+
+  // 6b. 若本步因 Y 碰撞刚落地且缓冲仍有效，则消费边沿（覆盖“点按后即将落地”场景）。
+  if (input.jumpBufferMs !== undefined && input.jumpBufferMs > 0) {
+    if (body.grounded) {
+      input.jumpBufferMs = 0;
+      if (!input.jump) {
+        body.vel[1] = PLAYER_JUMP_SPEED;
+        body.grounded = false;
+      }
+    } else {
+      input.jumpBufferMs = Math.max(0, input.jumpBufferMs - dt * 1000);
+    }
   }
 
   return body;

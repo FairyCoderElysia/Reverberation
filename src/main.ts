@@ -43,11 +43,13 @@ function bootInner(): void {
   let lastT = performance.now();
 
   // 7. __app（覆盖 index.html 内联骨架）
+  let lastWorldRev = game.world.revision;
   const app: __App = buildApp(
     game,
     (g) => {
       renderer.rebuildWorld(g.world.ids);
       renderer.addSourceMarkers(g.soundSources, g.spawn);
+      lastWorldRev = g.world.revision;
     },
     () => {
       renderMaterialPanel(app.state.materials);
@@ -63,6 +65,7 @@ function bootInner(): void {
   renderer.rebuildWorld(game.world.ids);
   renderer.addSourceMarkers(game.soundSources, game.spawn);
   renderMaterialPanel(app.state.materials);
+  lastWorldRev = game.world.revision;
 
   // 库存栏点选回调（与热键同一状态入口：game.selected）
   function refreshInventory(): void {
@@ -89,6 +92,11 @@ function bootInner(): void {
     lastT = now;
 
     game.tickFrame(dtMs);
+    // 用户实测热修：世界内容在运行时被放置/挖掘等修改后，下一帧立即重建 3D 场景。
+    if (game.world.revision !== lastWorldRev) {
+      lastWorldRev = game.world.revision;
+      renderer.rebuildWorld(game.world.ids);
+    }
     renderer.setView(game.playerEye(), game.body.yaw, game.body.pitch);
 
     frameCount += 1;
@@ -140,7 +148,11 @@ function bindInput(game: Game, renderer: Renderer): void {
   };
 
   window.addEventListener('keydown', (e) => {
-    if (e.code === 'Space') e.preventDefault();
+    if (e.code === 'Space') {
+      e.preventDefault();
+      // 非 repeat 的 keydown 记录跳跃缓冲；keyup 只清除 held，不影响已入缓冲的边沿。
+      if (!e.repeat) game.pressJump();
+    }
     if (e.code.startsWith('Digit')) {
       const n = Number(e.code.slice(5));
       if (n >= 1 && n <= 7) {

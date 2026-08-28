@@ -14,6 +14,7 @@ import { findStandingSpawn, generateWorld } from './worldgen';
 import type { GeneratedWorld } from './worldgen';
 import {
   INTERACTION_REACH,
+  JUMP_BUFFER_MS,
   MINING_SECONDS,
   PLAYER_PHYS_HZ,
   PLAYER_EYE_HEIGHT,
@@ -86,6 +87,8 @@ export class Game {
   private seedCounter: number;
   private accMs = 0;
   input: PlayerInput = { forward: 0, right: 0, jump: false };
+  /** 跳跃缓冲剩余毫秒（用户实测热修）：由 main 在 Space 非 repeat keydown 写入，固定步物理消费。 */
+  jumpBufferMs = 0;
   mineHeld = false;
   placePressed = false;
 
@@ -147,7 +150,11 @@ export class Game {
     const stepMs = 1000 / PLAYER_PHYS_HZ;
     while (this.accMs >= stepMs) {
       this.accMs -= stepMs;
-      stepPlayer(this.body, this.input, 1 / PLAYER_PHYS_HZ, this.world);
+      // 跳跃缓冲：由 stepPlayer 在「该固定步 grounded」时消费；未落地则stepPlayer按固定步时间递减。
+      const physInput: PlayerInput = { ...this.input };
+      if (this.jumpBufferMs > 0) physInput.jumpBufferMs = this.jumpBufferMs;
+      stepPlayer(this.body, physInput, 1 / PLAYER_PHYS_HZ, this.world);
+      this.jumpBufferMs = physInput.jumpBufferMs ?? 0;
     }
     this.updateMining(dt / 1000);
     if (this.placePressed) {
@@ -182,7 +189,13 @@ export class Game {
     if (!done) this.body.pos = [this.spawn[0] + 0.5, this.spawn[1] + 1, this.spawn[2] + 0.5];
     this.body.vel = [0, 0, 0];
     this.body.grounded = false;
+    this.jumpBufferMs = 0;
     this.cancelMining();
+  }
+
+  /** 记录一次跳跃按键边沿（main 的 keydown 调用；keyup 不影响已入缓冲的边沿）。 */
+  pressJump(): void {
+    this.jumpBufferMs = JUMP_BUFFER_MS;
   }
 
   giveItem(id: number, n: number): void {
@@ -375,6 +388,7 @@ export class Game {
     const p = parsed.payload;
     this.world.ids.set(p.ids);
     this.world.placed.set(p.placed);
+    this.world.revision += 1; // 载入会整体替换 ids/placed，版本号同步递增
     this.rebuildDurability();
     this.world.recomputeAllSurfaces();
     this.seed = p.seed >>> 0;
@@ -390,6 +404,7 @@ export class Game {
     };
     this.snapPlayerToAir();
     this.cancelMining();
+    this.jumpBufferMs = 0;
     this.loadNotice = null;
     return 'loaded';
   }
@@ -467,6 +482,7 @@ export class Game {
     this.soundSources = next.soundSources;
     this.body = makeBodyAtSpawn(next.spawn, this.world);
     this.cancelMining();
+    this.jumpBufferMs = 0;
     this.uiNotice = null;
     this.loadNotice = null;
   }

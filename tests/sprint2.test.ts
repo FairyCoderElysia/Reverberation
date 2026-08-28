@@ -10,6 +10,7 @@ import { Game, memoryStorage } from '../src/game';
 import { stepPlayer } from '../src/player';
 import type { PlayerBody } from '../src/player';
 import { renderInventory, shouldRefreshInventory } from '../src/ui';
+import { JUMP_BUFFER_MS } from '../src/config';
 
 const SEED = 0x20260001;
 
@@ -345,5 +346,67 @@ describe('Sprint 2 库存 UI 回流（SP2-06）', () => {
     } finally {
       (globalThis as Record<string, unknown>).document = origDocument;
     }
+  });
+});
+
+
+describe('用户实测热修：快速点按跳跃缓冲', () => {
+  it('keydown+keyup 同一逻辑帧后，后续 grounded 固定步仍能起跳', () => {
+    const { game } = makeApp();
+    game.teleport([game.spawn[0] + 0.5, game.spawn[1], game.spawn[2] + 0.5]);
+    for (let i = 0; i < 3; i++) game.tickFrame(17);
+    expect(game.body.grounded).toBe(true);
+    const y0 = game.body.pos[1];
+    // 模拟快速点按：只入缓冲，不设置 held jump（keyup 已发生）
+    game.pressJump();
+    game.tickFrame(17);
+    expect(game.body.vel[1]).toBeGreaterThan(0);
+    expect(game.body.pos[1]).toBeGreaterThan(y0);
+  });
+
+  it('空中点按后 150ms 内落地仍触发跳跃', () => {
+    const { game } = makeApp();
+    game.teleport([game.spawn[0] + 0.5, game.spawn[1] + 0.2, game.spawn[2] + 0.5]);
+    game.pressJump();
+    let jumped = false;
+    for (let i = 0; i < 12; i++) {
+      game.tickFrame(17);
+      if (game.body.vel[1] > 0) {
+        jumped = true;
+        break;
+      }
+    }
+    expect(jumped).toBe(true);
+    expect(game.jumpBufferMs).toBe(0);
+  });
+
+  it('缓冲超时（>150ms）后不再触发跳跃', () => {
+    const { game } = makeApp();
+    game.teleport([game.spawn[0] + 0.5, game.spawn[1] + 6, game.spawn[2] + 0.5]);
+    game.pressJump();
+    expect(game.jumpBufferMs).toBe(JUMP_BUFFER_MS);
+    // tickFrame 单次 dt 会夹取到 100ms，因此分两帧合计 200ms，确保超过 150ms 缓冲窗口。
+    game.tickFrame(100);
+    game.tickFrame(100);
+    expect(game.jumpBufferMs).toBe(0);
+    // 仍在下落：缓冲不会凭空把玩家弹起
+    expect(game.body.vel[1]).toBeLessThanOrEqual(0);
+  });
+});
+
+describe('用户实测热修：世界版本号与即时渲染可观测', () => {
+  it('state.worldRevision 随放置/拆除递增', () => {
+    const { app, game } = makeApp();
+    const rev0 = app.state.worldRevision;
+    setupWall(game); // 天然墙使用 world.setBlock，也应递增（任意 ids 修改都触发渲染）
+    const rev1 = app.state.worldRevision;
+    expect(rev1).toBeGreaterThan(rev0);
+    game.giveItem(1, 1);
+    game.selected = 1;
+    expect(game.tryPlaceSelected().ok).toBe(true);
+    const rev2 = app.state.worldRevision;
+    expect(rev2).toBeGreaterThan(rev1);
+    game.applyBreak([32, 15, 33], 1, true);
+    expect(app.state.worldRevision).toBeGreaterThan(rev2);
   });
 });

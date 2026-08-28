@@ -130,6 +130,8 @@ export class World {
   durability: Uint16Array;
   /** 放置标记（S2 增量 contract SP2-03）：1=玩家放置，0=天然/空气。与 ids 同步维护，单一来源。 */
   placed: Uint8Array;
+  /** 世界内容版本号（用户实测热修）：任何 setBlock/loadSave 等改变 ids 的入口递增，供渲染器按帧检测即时重建。 */
+  revision = 0;
   surfaceH: Uint8Array;
   private facilityMap: Map<number, FacilityState>;
 
@@ -183,6 +185,7 @@ export class World {
     this.ids[i] = material;
     this.durability[i] = material === 0 ? 0 : durability;
     this.placed[i] = material === 0 ? 0 : placed ? 1 : 0;
+    this.revision += 1; // 世界内容变化：渲染器按版本号感知单块变更
     // 更新该列地表高度缓存
     this.recomputeColumnSurface(x, z);
   }

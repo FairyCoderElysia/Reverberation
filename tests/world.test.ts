@@ -2,7 +2,7 @@
  * 三类用例之三：体素索引公式正确性（idx = x + 64*(z + 64*y) 与逆映射）。
  */
 import { describe, expect, it } from 'vitest';
-import { blockCoords, blockIndex, inBounds, WORLD_X, WORLD_Y, WORLD_Z } from '../src/world';
+import { blockCoords, blockIndex, inBounds, World, WORLD_X, WORLD_Y, WORLD_Z } from '../src/world';
 
 describe('体素索引公式（确定性关键）', () => {
   it('idx = x + 64*(z + 64*y)，且逆映射自洽', () => {
@@ -68,5 +68,20 @@ describe('索引公式单一来源（Code-M2）', () => {
     expect(src).not.toMatch(/const X = 64;/);
     expect(src).not.toMatch(/const Y = 24;/);
     expect(src).not.toMatch(/const Z = 64;/);
+  });
+});
+
+describe('世界版本号（用户实测热修：即时渲染跟踪）', () => {
+  it('putBlock/removeBlock 每次修改 ids 都递增 revision，供渲染器按帧检测', () => {
+    const w = new World();
+    expect(w.revision).toBe(0);
+    w.putBlock([0, 0, 0], 1, 30);
+    expect(w.revision).toBe(1);
+    expect(w.blockAt([0, 0, 0]).material).toBe(1);
+    w.putBlock([1, 0, 0], 2, 60);
+    expect(w.revision).toBe(2);
+    w.removeBlock([0, 0, 0]);
+    expect(w.revision).toBe(3);
+    expect(w.blockAt([0, 0, 0]).material).toBe(0);
   });
 });

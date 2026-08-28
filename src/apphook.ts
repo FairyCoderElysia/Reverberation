@@ -31,6 +31,8 @@ export interface AppState {
   selected: number;
   /** S2：放置方块计数（与 world.placed 同一增量来源） */
   placedBlocks: number;
+  /** 用户实测热修：世界内容版本号（放置/挖掘/载入等每次修改递增；渲染器按帧检测即时重建） */
+  worldRevision: number;
   /** S2：挖掘进度 0..1（无目标时为 0） */
   miningProgress: number;
   /** S2：交互距离上限（格，默认 6） */
@@ -143,6 +145,9 @@ export function buildApp(
     },
     get placedBlocks() {
       return game.world.countPlacedBlocks();
+    },
+    get worldRevision() {
+      return game.world.revision;
     },
     get miningProgress() {
       return game.miningProgress;
