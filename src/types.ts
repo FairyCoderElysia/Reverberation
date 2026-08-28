@@ -32,11 +32,26 @@ export interface MaterialSpec {
   reflect: Triplet; // 派生：clamp(1-abs-trans, 0.01, 1)
 }
 
-/** 方块引用：与 tech-design §4.1 IWorldRead.blockAt 字段一致 */
+/**
+ * 方块引用：与 tech-design §4.1 IWorldRead.blockAt 字段一致。
+ * S2 增量（contract SP2-03）：placed 标记原生/空气=false、玩家放置=true；
+ * 由 world.placed 数组单一来源派生。
+ */
 export interface BlockRef {
   material: number; // 0=空气, 1..7=材料
   durability: number;
   facility: FacilityState | null;
+  placed: boolean;
+}
+
+/** 玩家运行时状态（S2 增量）：pos 为脚底中心（浮点世界坐标），spawn 为出生格 */
+export interface PlayerState {
+  spawn: XYZA;
+  pos: [number, number, number];
+  vel: [number, number, number];
+  yaw: number;
+  pitch: number;
+  grounded: boolean;
 }
 
 /** 设施状态（S1 尚不产生设施，保留类型以备后续 sprint 复用） */

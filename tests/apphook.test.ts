@@ -6,15 +6,17 @@
  */
 import { describe, expect, it } from 'vitest';
 import { buildApp } from '../src/apphook';
+import { Game, memoryStorage } from '../src/game';
 import { generateWorld } from '../src/worldgen';
 import { TERRAIN_MAX_H, TERRAIN_MIN_H } from '../src/config';
 import { WORLD_X, WORLD_Y, WORLD_Z } from '../src/world';
 
 function makeApp(seed?: number) {
   const env = generateWorld(seed ?? 0x20260001);
+  const game = new Game(env, { storage: memoryStorage() });
   let pixelRatio = 2; // 模拟 high 档
   const app = buildApp(
-    env,
+    game,
     () => {},
     () => {},
     (t) => {
@@ -22,23 +24,24 @@ function makeApp(seed?: number) {
     },
     () => pixelRatio,
   );
-  return app;
+  return { app, game };
 }
 
 describe('window.__app 合同字段（离线审计）', () => {
   it('SP1-02：worldSize 口径为 [64,64,24]，blockAt 界外空气哨兵', () => {
-    const app = makeApp();
+    const { app } = makeApp();
     expect(app.state.worldSize).toEqual([64, 64, 24]);
     const inb = app.state.blockAt([32, 10, 32]);
     expect(inb).toHaveProperty('material');
     expect(inb).toHaveProperty('durability');
     expect(inb).toHaveProperty('facility');
-    expect(app.state.blockAt([-1, 0, 0])).toEqual({ material: 0, durability: 0, facility: null });
-    expect(app.state.blockAt([200, 3, 0])).toEqual({ material: 0, durability: 0, facility: null });
+    expect(inb).toHaveProperty('placed');
+    expect(app.state.blockAt([-1, 0, 0])).toEqual({ material: 0, durability: 0, facility: null, placed: false });
+    expect(app.state.blockAt([200, 3, 0])).toEqual({ material: 0, durability: 0, facility: null, placed: false });
   });
 
   it('SP1-03(v1.3)：surfaceHeight(x,z) 返回单列 number；surfaceHeights() 返回 64×64 扁平数组', () => {
-    const app = makeApp();
+    const { app } = makeApp();
     expect(typeof app.state.surfaceHeight(10, 10)).toBe('number');
     const arr = app.state.surfaceHeights();
     expect(Array.isArray(arr)).toBe(true);
@@ -51,7 +54,7 @@ describe('window.__app 合同字段（离线审计）', () => {
   });
 
   it('SP1-03：地形起伏（≥20 柱非众数 + 4 邻接 |Δh|≥1）', () => {
-    const app = makeApp();
+    const { app } = makeApp();
     const arr = app.state.surfaceHeights();
     const freq = new Map<number, number>();
     for (const h of arr) freq.set(h, (freq.get(h) ?? 0) + 1);
@@ -105,14 +108,14 @@ describe('window.__app 合同字段（离线审计）', () => {
   });
 
   it('SP1-04：findMaterialBlocks 7 种材料均有矿脉', () => {
-    const app = makeApp(123);
+    const { app } = makeApp(123);
     for (let id = 1; id <= 7; id++) {
       expect(app.debug.findMaterialBlocks(id).length).toBeGreaterThanOrEqual(1);
     }
   });
 
   it('SP1-05：同 seed regenerate 逐格一致、异 seed 有差异', () => {
-    const app = makeApp();
+    const { app } = makeApp();
     const coords: Array<[number, number, number]> = [];
     for (let i = 0; i < 150; i++) coords.push([(i * 13) % 64, (i * 7) % 24, (i * 29) % 64]);
     app.debug.regenerate(777);
@@ -125,7 +128,7 @@ describe('window.__app 合同字段（离线审计）', () => {
   });
 
   it('SP1-06：soundSources 恰 3 项、三频各一、mineable=false、坐标固定、处于空气', () => {
-    const app = makeApp();
+    const { app } = makeApp();
     expect(app.state.soundSources).toHaveLength(3);
     expect(app.state.soundSources.map((s) => s.dominantBand).sort()).toEqual([0, 1, 2]);
     for (const s of app.state.soundSources) {
@@ -139,7 +142,7 @@ describe('window.__app 合同字段（离线审计）', () => {
   });
 
   it('SP1-07/08：7 材料、耐久互异、reflect 派生一致、方向性 5 条', () => {
-    const ms = makeApp().state.materials;
+    const ms = makeApp().app.state.materials;
     expect(ms).toHaveLength(7);
     expect(new Set(ms.map((m) => m.durability)).size).toBe(7);
     for (const m of ms) {
@@ -163,7 +166,7 @@ describe('window.__app 合同字段（离线审计）', () => {
   });
 
   it('SP1-10：state 必含字段齐备，player.spawn 空气且脚下实心', () => {
-    const app = makeApp();
+    const { app } = makeApp();
     const st = app.state;
     expect(typeof st.seed).toBe('number');
     expect(st.worldSize).toEqual([64, 64, 24]);
@@ -182,7 +185,7 @@ describe('window.__app 合同字段（离线审计）', () => {
   });
 
   it('SP1-11：setMaterial 生效、reset 恢复默认', () => {
-    const app = makeApp();
+    const { app } = makeApp();
     const def0 = app.state.materials[0].abs[0];
     // 方向安全覆盖：泡沫低频吸收改为 0.20，仍满足 abs[2]-abs[0] ≥ 0.2
     app.debug.setMaterial(0, { abs: [0.2, undefined, undefined] });
@@ -192,7 +195,7 @@ describe('window.__app 合同字段（离线审计）', () => {
   });
 
   it('Code-M1：setMaterial 非法输入被夹取（durability/mass），非有限数忽略', () => {
-    const app = makeApp();
+    const { app } = makeApp();
     app.debug.setMaterial(3, { durability: -10, mass: -3 });
     expect(app.state.materials[3].durability).toBe(1);
     expect(app.state.materials[3].mass).toBe(0);
@@ -204,7 +207,7 @@ describe('window.__app 合同字段（离线审计）', () => {
   });
 
   it('Code-M1：setMaterial 非法 id 与破坏方向性的覆盖被拒绝', () => {
-    const app = makeApp();
+    const { app } = makeApp();
     expect(() => app.debug.setMaterial(99, { durability: 5 })).toThrow();
     const foamAbsBefore = app.state.materials[0].abs.slice();
     expect(() => app.debug.setMaterial(0, { abs: [1, 1, 1] })).toThrow(/方向性/);
@@ -212,7 +215,7 @@ describe('window.__app 合同字段（离线审计）', () => {
   });
 
   it('SP1-12：benchRay 返回 {avgMs,p95Ms,raysPerSec} 均为有限数并写 lastBench', () => {
-    const app = makeApp();
+    const { app } = makeApp();
     const r = app.debug.benchRay({ rays: 128, bounces: 3 });
     expect(r).toHaveProperty('avgMs');
     expect(r).toHaveProperty('p95Ms');
@@ -225,7 +228,7 @@ describe('window.__app 合同字段（离线审计）', () => {
   });
 
   it('Code-m7：getWorldIds 返回副本，不暴露内部 Uint8Array 活引用', () => {
-    const app = makeApp();
+    const { app } = makeApp();
     const a = app.state.getWorldIds();
     const before = app.state.blockAt([0, 0, 0]).material;
     a[0] = 3;
@@ -233,7 +236,7 @@ describe('window.__app 合同字段（离线审计）', () => {
   });
 
   it('SP1-14：setGraphicTier(low) 后 pixelRatio 可读下降', () => {
-    const app = makeApp();
+    const { app } = makeApp();
     const before = app.state.perf.pixelRatio;
     app.debug.setGraphicTier('low');
     expect(app.state.perf.pixelRatio).toBeLessThan(before);

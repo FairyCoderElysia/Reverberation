@@ -149,13 +149,17 @@ function placeVeins(world: World, seed: number): void {
   world.recomputeAllSurfaces();
 }
 
-/** 选取出生点：固定规则，保证「地表上方、脚下实心」 */
-function pickSpawn(world: World): XYZA {
-  // 从世界中心向边缘扫描，取第一个满足「该格是空气且正下方一列非空」的列
-  const center = Math.floor(WORLD_X / 2);
-  for (let r = 0; r < WORLD_X; r++) {
-    for (let z = center - r; z <= center + r; z++) {
-      for (let x = center - r; x <= center + r; x++) {
+/**
+ * 寻找「地表上方、脚下方实心」的站立格（从 nearX/nearZ 出发螺旋外扩，确定性）。
+ * 用于出生点选取与存档载入后的 spawn 恢复。
+ */
+export function findStandingSpawn(world: World, nearX: number, nearZ: number): XYZA {
+  const cx = Math.min(WORLD_X - 1, Math.max(0, Math.floor(nearX)));
+  const cz = Math.min(WORLD_Z - 1, Math.max(0, Math.floor(nearZ)));
+  const radius = Math.max(WORLD_X, WORLD_Z);
+  for (let r = 0; r < radius; r++) {
+    for (let z = cz - r; z <= cz + r; z++) {
+      for (let x = cx - r; x <= cx + r; x++) {
         if (!inBounds(x, 0, z)) continue;
         const top = world.surfaceHeight(x, z);
         if (top <= 0) continue;
@@ -168,8 +172,14 @@ function pickSpawn(world: World): XYZA {
     }
   }
   // 兜底：中心列
+  const center = Math.floor(WORLD_X / 2);
   const fallbackTop = world.surfaceHeight(center, center);
-  return [center, fallbackTop + 1, center];
+  return [center, Math.min(WORLD_Y - 1, fallbackTop + 1), center];
+}
+
+/** 选取出生点：固定规则，保证「地表上方、脚下实心」 */
+function pickSpawn(world: World): XYZA {
+  return findStandingSpawn(world, Math.floor(WORLD_X / 2), Math.floor(WORLD_Z / 2));
 }
 
 /** 全量生成：同一 seed 两次调用结果完全一致（逐格） */

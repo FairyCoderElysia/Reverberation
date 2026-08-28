@@ -1,37 +1,54 @@
 /**
- * M12 调试句柄 window.__app（初版）：state / reset() / debug（对象，非可调用函数）。
- * 覆盖 Sprint 1 全部数值断言字段（SP1-02..14）。
+ * M12 调试句柄 window.__app：state / reset() / debug（对象）。
+ * S1 字段/钩子全部保留（不回归），S2 增量见 DebugHooks/AppState 注释。
+ * 本模块绑定 Game（单权威运行时），只读投影 + 命令转发，不持有第二份状态。
  */
 import { runBenchRay } from './bench';
-import {
-  effectiveMaterials,
-  effectiveRows,
-  MATERIAL_TABLE,
-  validateDefaultTable,
-  validateTable,
-} from './materials';
+import { effectiveRows, MATERIAL_TABLE, validateTable } from './materials';
 import { mergeTriplet } from './materials';
 import type { MaterialOverrides } from './materials';
-import { generateWorld } from './worldgen';
+import type { Game } from './game';
+import { INTERACTION_REACH } from './config';
 import type { GraphicTier, PerfState, SoundSource, XYZA } from './types';
-import { World } from './world';
+import type { BlockRef } from './types';
 
 export interface AppState {
   seed: number;
   worldSize: [number, number, number];
-  materials: ReturnType<typeof effectiveMaterials>;
+  materials: ReturnType<Game['materialSpecs']>;
   soundSources: SoundSource[];
-  player: { spawn: XYZA };
+  player: {
+    spawn: XYZA;
+    pos: [number, number, number];
+    vel: [number, number, number];
+    yaw: number;
+    pitch: number;
+    grounded: boolean;
+  };
+  /** S2：库存（副本，index 1..7 为材料数量） */
+  inventory: number[];
+  /** S2：当前选中材料 id（1..7） */
+  selected: number;
+  /** S2：放置方块计数（与 world.placed 同一增量来源） */
+  placedBlocks: number;
+  /** S2：挖掘进度 0..1（无目标时为 0） */
+  miningProgress: number;
+  /** S2：交互距离上限（格，默认 6） */
+  interactionReach: number;
+  /** S2：最近一次 writeSave 成功后的 Unix 毫秒时间戳（number） */
+  lastSavedAt: number;
+  /** S2：最近一次写档/载入错误的中文提示（null=无） */
+  saveError: string | null;
+  loadNotice: string | null;
   perf: PerfState;
-  blockAt: (g: XYZA) => { material: number; durability: number; facility: unknown };
-  /** SP1-03(v1.3)：单列地表高度（数字） */
+  blockAt: (g: XYZA) => BlockRef;
   surfaceHeight: (x: number, z: number) => number;
-  /** SP1-03(v1.3)：64×64 扁平高度数组（x + 64*z 序），副本 */
   surfaceHeights: () => number[];
-  getWorldIds: () => Uint8Array; // 渲染/测试共享的世界快照（返回副本）
+  getWorldIds: () => Uint8Array;
 }
 
 export interface DebugHooks {
+  // S1
   regenerate: (seed: number) => void;
   setMaterial: (id: number, patch: MaterialOverrides) => void;
   resetMaterials: () => void;
@@ -42,6 +59,12 @@ export interface DebugHooks {
     raysPerSec: number;
   };
   findMaterialBlocks: (id: number) => XYZA[];
+  // S2 增量
+  giveItem: (id: number, n: number) => void;
+  saveNow: () => void;
+  loadSave: () => 'loaded' | 'empty' | 'invalid';
+  clearSave: () => void;
+  teleport: (pos: XYZA) => void;
 }
 
 export interface __App {
@@ -50,30 +73,14 @@ export interface __App {
   debug: DebugHooks;
 }
 
-export interface AppEnvironment {
-  world: World;
-  seed: number;
-  spawn: XYZA;
-  soundSources: SoundSource[];
-}
-
-/** 构建 __app（world 就绪后调用） */
+/** 构建 __app（Game 就绪后调用）。 */
 export function buildApp(
-  env: AppEnvironment,
-  onRegenerate: (env: AppEnvironment) => void,
+  game: Game,
+  onWorldChange: (game: Game) => void,
   onMaterialChange: () => void,
   onTierChange: (t: GraphicTier) => void,
   readPixelRatio: () => number,
 ): __App {
-  let world = env.world;
-  let seed = env.seed;
-  let spawn = env.spawn;
-  let soundSources = env.soundSources;
-  const overrides = new Map<number, MaterialOverrides>();
-
-  // 单调种子来源：与 Math.random 无关；世界生成路径内只使用注入 seed 的 RNG
-  let seedCounter = (seed + 0x51ab3f) >>> 0;
-
   const perf: PerfState = {
     fps: 0,
     avgFrameMs: 0,
@@ -85,53 +92,30 @@ export function buildApp(
 
   const findMaterialBlocks = (id: number): XYZA[] => {
     const out: XYZA[] = [];
-    const [wx, wy, wz] = world.size;
-    for (let y = 0; y < wy; y++) {
-      for (let z = 0; z < wz; z++) {
-        for (let x = 0; x < wx; x++) {
-          if (world.ids[world.idx(x, y, z)] === id) out.push([x, y, z]);
+    const w = game.world;
+    for (let y = 0; y < w.size[1]; y++) {
+      for (let z = 0; z < w.size[2]; z++) {
+        for (let x = 0; x < w.size[0]; x++) {
+          if (w.ids[w.idx(x, y, z)] === id) out.push([x, y, z]);
         }
       }
     }
     return out;
   };
 
-  const regenerate = (s: number): void => {
-    const next = generateWorld(s);
-    world = next.world;
-    seed = next.seed;
-    spawn = next.spawn;
-    soundSources = next.soundSources;
-    onRegenerate(next);
-  };
-
-  const reset = (): void => {
-    // 等价「新游戏」：换种子 + 恢复默认材料参数
-    seedCounter = (seedCounter + 0x9e3779b9) >>> 0;
-    overrides.clear();
-    const next = generateWorld(seedCounter);
-    world = next.world;
-    seed = next.seed;
-    spawn = next.spawn;
-    soundSources = next.soundSources;
-    onRegenerate(next);
-    onMaterialChange();
-  };
-
   const state: AppState = {
     get seed() {
-      return seed;
+      return game.seed;
     },
     get worldSize() {
-      // 合同 SP1-02 要求 [64,64,24]（宽, 深, 高）；world.size 内部为 [x,y,z]=[64,24,64]，需转换口径。
-      const [wx, wy, wz] = world.size;
+      const [wx, wy, wz] = game.world.size;
       return [wx, wz, wy] as [number, number, number];
     },
     get materials() {
-      return effectiveMaterials(overrides);
+      return game.materialSpecs();
     },
     get soundSources() {
-      return soundSources.map((s) => ({
+      return game.soundSources.map((s) => ({
         id: s.id,
         pos: [s.pos[0], s.pos[1], s.pos[2]] as XYZA,
         dominantBand: s.dominantBand,
@@ -139,43 +123,73 @@ export function buildApp(
       }));
     },
     get player() {
-      return { spawn: [spawn[0], spawn[1], spawn[2]] as XYZA };
+      return {
+        spawn: [game.spawn[0], game.spawn[1], game.spawn[2]] as XYZA,
+        pos: game.playerPos,
+        vel: [game.body.vel[0], game.body.vel[1], game.body.vel[2]] as [number, number, number],
+        yaw: game.body.yaw,
+        pitch: game.body.pitch,
+        grounded: game.body.grounded,
+      };
+    },
+    get inventory() {
+      return game.inventory.slice();
+    },
+    get selected() {
+      return game.selected;
+    },
+    get placedBlocks() {
+      return game.world.countPlacedBlocks();
+    },
+    get miningProgress() {
+      return game.miningProgress;
+    },
+    get interactionReach() {
+      return INTERACTION_REACH;
+    },
+    get lastSavedAt() {
+      return game.lastSavedAt;
+    },
+    get saveError() {
+      return game.saveError;
+    },
+    get loadNotice() {
+      return game.loadNotice;
     },
     perf,
-    blockAt: (g: XYZA) => {
-      const b = world.blockAt(g);
-      return { material: b.material, durability: b.durability, facility: b.facility as unknown };
-    },
-    surfaceHeight: (x, z) => world.surfaceHeight(x, z),
-    surfaceHeights: () => Array.from(world.surfaceH),
-    getWorldIds: () => world.ids.slice(),
+    blockAt: (g: XYZA) => game.world.blockAt(g),
+    surfaceHeight: (x, z) => game.world.surfaceHeight(x, z),
+    surfaceHeights: () => Array.from(game.world.surfaceH),
+    getWorldIds: () => game.world.ids.slice(),
   };
 
   const debug: DebugHooks = {
-    regenerate,
+    regenerate: (seed: number) => {
+      game.regenerate(seed);
+      onWorldChange(game);
+    },
     setMaterial: (id: number, patch: MaterialOverrides) => {
       if (!Number.isInteger(id) || id < 0 || id >= MATERIAL_TABLE.length) {
         throw new Error('setMaterial: 材料 id 非法（需为 0..' + (MATERIAL_TABLE.length - 1) + ' 的整数）');
       }
-      const prev = overrides.get(id) ?? {};
+      const prev = game.overrides.get(id) ?? {};
       const next: MaterialOverrides = {
         abs: mergeTriplet(prev.abs, patch.abs),
         trans: mergeTriplet(prev.trans, patch.trans),
         durability: patch.durability ?? prev.durability,
         mass: patch.mass ?? prev.mass,
       };
-      // 覆盖后对 effective 材料表重新执行方向性校验（Code-M1）；违规则拒绝并抛错，不落盘
-      const trial = new Map(overrides);
+      const trial = new Map(game.overrides);
       trial.set(id, next);
       const violations = validateTable(effectiveRows(trial));
       if (violations.length > 0) {
         throw new Error('setMaterial 使材料方向性约束失效: ' + violations.join('; '));
       }
-      overrides.set(id, next);
+      game.overrides.set(id, next);
       onMaterialChange();
     },
     resetMaterials: () => {
-      overrides.clear();
+      game.overrides.clear();
       onMaterialChange();
     },
     setGraphicTier: (t: GraphicTier) => {
@@ -183,11 +197,32 @@ export function buildApp(
       perf.pixelRatio = readPixelRatio();
     },
     benchRay: (opts) => {
-      const res = runBenchRay(world, opts ?? {});
+      const res = runBenchRay(game.world, opts ?? {});
       perf.lastBench = res;
       return res;
     },
     findMaterialBlocks: findMaterialBlocks,
+    giveItem: (id, n) => {
+      game.giveItem(id, n);
+    },
+    saveNow: () => {
+      game.writeSave();
+    },
+    loadSave: () => {
+      return game.loadSave();
+    },
+    clearSave: () => {
+      game.clearSave();
+    },
+    teleport: (pos) => {
+      game.teleport(pos);
+    },
+  };
+
+  const reset = (): void => {
+    game.reset();
+    onWorldChange(game);
+    onMaterialChange();
   };
 
   return { state, reset, debug };
@@ -195,7 +230,7 @@ export function buildApp(
 
 /** 启动时对默认材料表做方向性自检（违规则抛错，避免带病上线） */
 export function assertDefaultTableValid(): void {
-  const errors = validateDefaultTable();
+  const errors = validateTable(MATERIAL_TABLE);
   if (errors.length > 0) {
     throw new Error('材料方向性约束校验失败: ' + errors.join('; '));
   }

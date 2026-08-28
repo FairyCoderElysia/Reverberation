@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { GraphicTier, SoundSource, XYZA } from '../types';
+import { PIXEL_RATIO_HIGH_CAP, PIXEL_RATIO_LOW } from '../config';
 import { BAND_COLORS, hexToNumber, MATERIAL_COLORS } from '../theme';
 import { blockIndex, WORLD_X, WORLD_Y, WORLD_Z } from '../world';
 
@@ -26,7 +26,6 @@ export class Renderer {
   private renderer: THREE.WebGLRenderer | null = null;
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
-  private controls: OrbitControls | null = null;
   private container: HTMLElement;
   private meshes: THREE.InstancedMesh[] = [];
   private markers: THREE.Object3D[] = [];
@@ -43,7 +42,7 @@ export class Renderer {
       0.1,
       500,
     );
-    this.camera.position.set(64, 30, -16);
+    this.camera.position.set(32, 12, 32);
 
     this.available = detectWebGL2();
     if (!this.available) return;
@@ -51,16 +50,10 @@ export class Renderer {
     try {
       this.renderer = new THREE.WebGLRenderer({ antialias: true });
       this.renderer.setSize(container.clientWidth, container.clientHeight);
-      this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      this.applyPixelRatio(this.tier);
+      this.renderer.domElement.style.display = 'block';
+      this.renderer.domElement.style.cursor = 'crosshair';
       container.appendChild(this.renderer.domElement);
-
-      this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-      this.controls.target.set(32, 9, 32);
-      this.controls.enableDamping = true;
-      this.controls.minDistance = 4;
-      this.controls.maxDistance = 160;
-      this.controls.maxPolarAngle = Math.PI * 0.49;
-      this.controls.update();
 
       const ambient = new THREE.AmbientLight(0xffffff, 0.7);
       const dir = new THREE.DirectionalLight(0xffffff, 1.2);
@@ -71,9 +64,26 @@ export class Renderer {
       if (this.renderer) {
         this.renderer.dispose();
         this.renderer = null;
-        this.controls = null;
       }
     }
+  }
+
+  /** 像素比引用 config 单一来源（Code N1）：无 2 / 0.75 字面量双源。 */
+  private applyPixelRatio(tier: GraphicTier): void {
+    if (!this.renderer) return;
+    const pr =
+      tier === 'high'
+        ? Math.min(window.devicePixelRatio || 1, PIXEL_RATIO_HIGH_CAP)
+        : PIXEL_RATIO_LOW;
+    this.renderer.setPixelRatio(pr);
+  }
+
+  /** 第一人称视图：由 game 每帧推送眼睛位置与朝向。 */
+  setView(eye: [number, number, number], yaw: number, pitch: number): void {
+    this.camera.position.set(eye[0], eye[1], eye[2]);
+    this.camera.rotation.order = 'YXZ';
+    this.camera.rotation.y = yaw;
+    this.camera.rotation.x = pitch;
   }
 
   rebuildWorld(worldIds: Uint8Array): void {
@@ -140,7 +150,7 @@ export class Renderer {
 
   addSourceMarkers(sources: SoundSource[], spawn: XYZA): void {
     if (!this.renderer) return;
-    
+
     for (const s of sources) {
       const geo = new THREE.OctahedronGeometry(0.7, 0);
       const mat = new THREE.MeshBasicMaterial({ color: hexToNumber(BAND_COLORS[s.dominantBand]) });
@@ -161,7 +171,6 @@ export class Renderer {
     this.onFrame = onFrame;
     const loop = (): void => {
       if (!this.renderer) return;
-      if (this.controls) this.controls.update();
       this.renderer.render(this.scene, this.camera);
       this.drawCalls = this.renderer.info.render.calls;
       if (this.onFrame) this.onFrame();
@@ -170,7 +179,6 @@ export class Renderer {
     this.rafId = requestAnimationFrame(loop);
   }
 
-  // TODO(S2)：渲染生命周期销毁/降级重建时调用。
   stop(): void {
     cancelAnimationFrame(this.rafId);
   }
@@ -178,13 +186,17 @@ export class Renderer {
   setTier(tier: GraphicTier): void {
     this.tier = tier;
     if (!this.renderer) return;
-    const pr = tier === 'high' ? Math.min(window.devicePixelRatio || 1, 2) : 0.75;
-    this.renderer.setPixelRatio(pr);
+    this.applyPixelRatio(tier);
     this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
   }
 
   getPixelRatio(): number {
     return this.renderer ? this.renderer.getPixelRatio() : 0;
+  }
+
+  /** 渲染画布 DOM（供输入绑定）。 */
+  get domElement(): HTMLCanvasElement | null {
+    return this.renderer ? this.renderer.domElement : null;
   }
 
   handleResize(): void {

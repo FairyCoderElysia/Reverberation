@@ -128,12 +128,15 @@ export class World {
   readonly size: [number, number, number] = [WORLD_X, WORLD_Y, WORLD_Z];
   ids: Uint8Array;
   durability: Uint16Array;
+  /** 放置标记（S2 增量 contract SP2-03）：1=玩家放置，0=天然/空气。与 ids 同步维护，单一来源。 */
+  placed: Uint8Array;
   surfaceH: Uint8Array;
   private facilityMap: Map<number, FacilityState>;
 
   constructor() {
     this.ids = new Uint8Array(WORLD_X * WORLD_Y * WORLD_Z);
     this.durability = new Uint16Array(WORLD_X * WORLD_Y * WORLD_Z);
+    this.placed = new Uint8Array(WORLD_X * WORLD_Y * WORLD_Z);
     this.surfaceH = new Uint8Array(WORLD_X * WORLD_Z);
     this.facilityMap = new Map();
   }
@@ -151,13 +154,14 @@ export class World {
   blockAt(g: XYZA): BlockRef {
     const [x, y, z] = g;
     if (!inBounds(x, y, z)) {
-      return { material: 0, durability: 0, facility: null };
+      return { material: 0, durability: 0, facility: null, placed: false };
     }
     const i = this.idx(x, y, z);
     return {
       material: this.ids[i],
       durability: this.durability[i],
       facility: this.facilityMap.get(i) ?? null,
+      placed: this.placed[i] === 1,
     };
   }
 
@@ -171,15 +175,35 @@ export class World {
     return this.surfaceH[x + WORLD_X * z];
   }
 
-  // TODO(S2)：玩家建造/拆除在 Sprint 2 落地，届时消费此方法。
-  setBlock(g: XYZA, material: number, durability: number): void {
+  /** 写入方块（默认天然 placed=false）；material===0 即移除并清空 placed/durability。 */
+  setBlock(g: XYZA, material: number, durability: number, placed = false): void {
     const [x, y, z] = g;
     if (!inBounds(x, y, z)) return;
     const i = this.idx(x, y, z);
     this.ids[i] = material;
     this.durability[i] = material === 0 ? 0 : durability;
+    this.placed[i] = material === 0 ? 0 : placed ? 1 : 0;
     // 更新该列地表高度缓存
     this.recomputeColumnSurface(x, z);
+  }
+
+  /** 玩家放置方块（S2）：材料 + 耐久（=材料常量）+ placed 标记单一入口。 */
+  putBlock(g: XYZA, material: number, durability: number): void {
+    this.setBlock(g, material, durability, true);
+  }
+
+  /** 移除方块（S2）：ids/durability/placed 一并复位。 */
+  removeBlock(g: XYZA): void {
+    this.setBlock(g, 0, 0, false);
+  }
+
+  /** 当前玩家放置方块总数（与 placed 数组同一增量来源，不另设计数器）。 */
+  countPlacedBlocks(): number {
+    let n = 0;
+    for (let i = 0; i < this.placed.length; i++) {
+      if (this.placed[i] === 1) n += 1;
+    }
+    return n;
   }
 
   /** 整列重算地表高度（置块后调用） */
