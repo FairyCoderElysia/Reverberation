@@ -9,7 +9,16 @@
  * - 禁止 Math.random 进入本模块；
  * - 固定射线序列（Fibonacci 球面 或 定向锥内确定性采样）。
  */
-import { ACOUSTIC_DEFAULT_PARAMS, ACOUSTIC_DEFAULT_TUNING } from './config';
+import {
+  ACOUSTIC_DEFAULT_PARAMS,
+  ACOUSTIC_DEFAULT_TUNING,
+  ACOUSTIC_DIFFRACT_BEND,
+  ACOUSTIC_DIFFRACT_MAX_DIST,
+  ACOUSTIC_DIR_SPREAD,
+  ACOUSTIC_GOLDEN_ANGLE,
+  ACOUSTIC_MAX_RAY_DIST,
+  ACOUSTIC_TUNING_RANGES,
+} from './config';
 import type { BandEnergy, MaterialSpec, XYZA } from './types';
 
 export type { BandEnergy } from './types';
@@ -32,6 +41,7 @@ export interface AcousticTuning {
   G_TRANS: number;
   G_DIST_EXP: number;
   G_DIFFRACT: number;
+  fieldThreshold: number;
 }
 
 /** 传播参数（性能/精度；S4 未做降级 UI，但保留默认值） */
@@ -42,9 +52,11 @@ export interface AcousticParams {
   fieldThreshold: number;
 }
 
-/** 能量场：稀疏 bins + 版本号 + 唯一读 API sample(g) */
+/**
+ * 能量场：稀疏内部 Map + 版本号 + 唯一读 API sample(g)。
+ * bins 不对外暴露，调用方只能通过 sample 读取，避免绕开阈值/边界语义。
+ */
 export interface EnergyField {
-  bins: Map<number, BandEnergy>;
   version: number;
   sample: (g: XYZA) => BandEnergy;
 }
@@ -55,10 +67,8 @@ export const DEFAULT_ACOUSTIC_PARAMS: AcousticParams = { ...ACOUSTIC_DEFAULT_PAR
 /** 默认调谐参数（tech-design §3.1；常量单一来源 config.ts） */
 export const DEFAULT_ACOUSTIC_TUNING: AcousticTuning = { ...ACOUSTIC_DEFAULT_TUNING };
 
-const MAX_RAY_DIST = 160;
 const EPS = 1e-9;
 const TWO_PI = Math.PI * 2;
-const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 
 function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v;
@@ -106,7 +116,7 @@ function deterministicDirections(rayCount: number, dir?: XYZA): XYZA[] {
     for (let i = 0; i < sphereCount; i++) {
       const y = 1 - (2 * (i + 0.5)) / sphereCount;
       const r = Math.sqrt(Math.max(0, 1 - y * y));
-      const phi = i * GOLDEN_ANGLE;
+      const phi = i * ACOUSTIC_GOLDEN_ANGLE;
       out.push([r * Math.cos(phi), y, r * Math.sin(phi)]);
     }
     return out;
@@ -127,14 +137,14 @@ function deterministicDirections(rayCount: number, dir?: XYZA): XYZA[] {
     main[0] * t0[1] - main[1] * t0[0],
   ]);
   // 定向锥：第一束严格沿 main，其余围绕 main 展开，形成确定性的窄锥。
-  const spread = 0.45;
+  const spread = ACOUSTIC_DIR_SPREAD;
   for (let i = 0; i < rayCount; i++) {
     if (i === 0) {
       out.push([main[0], main[1], main[2]]);
       continue;
     }
     const u = (i - 0.5) / rayCount;
-    const v = (i * GOLDEN_ANGLE * 2.399963) % TWO_PI;
+    const v = (i * ACOUSTIC_GOLDEN_ANGLE * 2.399963) % TWO_PI;
     const r = spread * Math.sqrt(u * 2);
     const px = r * Math.cos(v);
     const py = r * Math.sin(v);
@@ -196,15 +206,32 @@ export class AcousticEngine {
   }
 
   setTuning(patch: Partial<AcousticTuning>): void {
+    // 与 Game 层校验口径一致：超范围统一抛中文错误，不做静默夹取。
     const t = this.tuning;
-    if (patch.G_ABSORB !== undefined) t.G_ABSORB = Math.min(3, Math.max(0.5, patch.G_ABSORB));
-    if (patch.G_TRANS !== undefined) t.G_TRANS = Math.min(2, Math.max(0.5, patch.G_TRANS));
-    if (patch.G_DIST_EXP !== undefined) t.G_DIST_EXP = Math.min(3, Math.max(1, patch.G_DIST_EXP));
-    if (patch.G_DIFFRACT !== undefined) t.G_DIFFRACT = Math.min(2, Math.max(0, patch.G_DIFFRACT));
+    const rangeOf = (key: keyof AcousticTuning): readonly [number, number] =>
+      ACOUSTIC_TUNING_RANGES[key];
+    const apply = (key: keyof AcousticTuning, value: number | undefined): void => {
+      if (value === undefined) return;
+      if (!Number.isFinite(value)) {
+        throw new Error('acoustics.setTuning: ' + key + ' 必须为有限数');
+      }
+      const [min, max] = rangeOf(key);
+      if (value < min || value > max) {
+        throw new Error('acoustics.setTuning: ' + key + ' 超出允许区间 [' + String(min) + ', ' + String(max) + ']');
+      }
+      (t as Record<keyof AcousticTuning, number>)[key] = value;
+      if (key === 'fieldThreshold') this.params.fieldThreshold = value;
+    };
+    apply('G_ABSORB', patch.G_ABSORB);
+    apply('G_TRANS', patch.G_TRANS);
+    apply('G_DIST_EXP', patch.G_DIST_EXP);
+    apply('G_DIFFRACT', patch.G_DIFFRACT);
+    apply('fieldThreshold', patch.fieldThreshold);
   }
 
   resetTuning(): void {
     this.tuning = { ...DEFAULT_ACOUSTIC_TUNING };
+    this.params.fieldThreshold = DEFAULT_ACOUSTIC_TUNING.fieldThreshold;
   }
 
   /** 仅由 Game 在默认事件后调用；返回新的 field，不在这里管理源列表 */
@@ -216,18 +243,18 @@ export class AcousticEngine {
       const srcField = this.computeSourceField(src);
       mergeField(merged, srcField);
     }
+    this.filterBelowThreshold(merged, this.params.fieldThreshold);
     this.sourceCounter = (this.sourceCounter + 1) >>> 0;
     const version = this.sourceCounter;
     const self = this;
     return {
-      bins: merged,
       version,
       sample: (g: XYZA) => self.sampleFromMap(merged, g),
     };
   }
 
-  /** 强制重算由 Game 调用；engine 本身不持有 field 状态（Game 持有） */
-  sampleFromMap(bins: Map<number, BandEnergy>, g: XYZA): BandEnergy {
+  /** 内部采样实现；不对外暴露独立读取路径（sample 是唯一读 API）。 */
+  private sampleFromMap(bins: Map<number, BandEnergy>, g: XYZA): BandEnergy {
     const [x, y, z] = g;
     if (!inBounds(x, y, z)) return [0, 0, 0];
     if (!Number.isInteger(x) || !Number.isInteger(y) || !Number.isInteger(z)) return [0, 0, 0];
@@ -235,6 +262,15 @@ export class AcousticEngine {
     const e = bins.get(idx);
     if (!e) return [0, 0, 0];
     return [e[0], e[1], e[2]];
+  }
+
+  private filterBelowThreshold(map: Map<number, BandEnergy>, threshold: number): void {
+    if (threshold <= 0) return;
+    const drop: number[] = [];
+    for (const [idx, e] of map) {
+      if (e[0] <= threshold && e[1] <= threshold && e[2] <= threshold) drop.push(idx);
+    }
+    for (const idx of drop) map.delete(idx);
   }
 
   private computeSourceField(src: AcousticEvent): Map<number, BandEnergy> {
@@ -270,7 +306,7 @@ export class AcousticEngine {
   ): void {
     if (power[0] <= 0 && power[1] <= 0 && power[2] <= 0) return;
     const d = normalizeDir([dir[0], dir[1], dir[2]]);
-    const maxT = MAX_RAY_DIST;
+    const maxT = ACOUSTIC_MAX_RAY_DIST;
     let hitPoint: [number, number, number] | null = null;
     let hitNormal: XYZA = [0, 0, 0];
     let reflectedPower: BandEnergy | null = null;
@@ -315,6 +351,9 @@ export class AcousticEngine {
         Math.pow(ac.tau[1], this.tuning.G_TRANS),
         Math.pow(ac.tau[2], this.tuning.G_TRANS),
       ];
+      // 设施/τ=0 材料是完全反射障碍：不产生任何绕射能量，杜绝沿原方向中心泄漏。
+      const fullyReflective =
+        transFactor[0] === 0 && transFactor[1] === 0 && transFactor[2] === 0;
       const afterAbsorb: BandEnergy = [
         arrived[0] * (1 - arrivedAbsorb[0]),
         arrived[1] * (1 - arrivedAbsorb[1]),
@@ -343,7 +382,7 @@ export class AcousticEngine {
       ];
       hitNormal = faceNormal(ctx.face);
       reflectedPower = reflected;
-      diffractedPower = diff;
+      diffractedPower = fullyReflective ? null : diff;
 
       // 透射：继续穿墙（能量按透射后值）
       if (transmitted[0] > 0 || transmitted[1] > 0 || transmitted[2] > 0) {
@@ -386,8 +425,7 @@ export class AcousticEngine {
         hitPoint,
         d,
         diffractedPower,
-        mats,
-        Math.max(0, maxBouncesLeft),
+        hitNormal,
       );
     }
   }
@@ -420,23 +458,77 @@ export class AcousticEngine {
     );
   }
 
-  /** 简化绕射射线：沿原方向穿透少量格，能量远小于直接/反射路径 */
+  /**
+   * 简化边缘绕射：不再沿原方向中心穿墙，而是从障碍物远侧边缘向阴影区发出
+   * 少量确定性射线，模拟「绕边缘进入」。这样设施/τ=0 全反射障碍也不会出现
+   * 中心直进泄漏；SP4-05 的遮挡后 >0 由这些边缘路径提供，而非中心穿透。
+   */
   private traceDiffract(
     map: Map<number, BandEnergy>,
-    startPoint: [number, number, number],
+    hitPoint: [number, number, number],
     dir: XYZA,
     power: BandEnergy,
-    mats: readonly MaterialSpec[],
-    maxBouncesLeft: number,
+    hitNormal: XYZA,
   ): void {
-    // maxBouncesLeft 未使用：简化绕射只做固定短程泄漏，避免过度穿墙。
-    void mats;
-    void maxBouncesLeft;
     const d = normalizeDir([dir[0], dir[1], dir[2]]);
-    const ox = startPoint[0] + d[0] * (1 + 0.5);
-    const oy = startPoint[1] + d[1] * (1 + 0.5);
-    const oz = startPoint[2] + d[2] * (1 + 0.5);
-    const maxT = 6;
+    // 障碍物远侧中心点：入射点沿原方向越过一个体素（近似远面）。
+    const backX = hitPoint[0] + d[0] * (1 + 1e-4);
+    const backY = hitPoint[1] + d[1] * (1 + 1e-4);
+    const backZ = hitPoint[2] + d[2] * (1 + 1e-4);
+    const tangents = this.faceTangents(hitNormal);
+    const perEdge = 0.25; // 4 条边缘射线共享原绕射功率，保持总量级不变
+    for (const tangent of tangents) {
+      for (const sign of [-1, 1]) {
+        const ox = backX + tangent[0] * sign * (0.5 + 1e-3);
+        const oy = backY + tangent[1] * sign * (0.5 + 1e-3);
+        const oz = backZ + tangent[2] * sign * (0.5 + 1e-3);
+        // 边缘射线朝阴影中心弯曲：sign 为边缘外侧，-sign 为指向中心。
+        const bendDir = normalizeDir([
+          d[0] - sign * ACOUSTIC_DIFFRACT_BEND * tangent[0],
+          d[1] - sign * ACOUSTIC_DIFFRACT_BEND * tangent[1],
+          d[2] - sign * ACOUSTIC_DIFFRACT_BEND * tangent[2],
+        ] as XYZA);
+        this.addDiffractRay(
+          map,
+          ox,
+          oy,
+          oz,
+          bendDir,
+          [power[0] * perEdge, power[1] * perEdge, power[2] * perEdge],
+        );
+      }
+    }
+  }
+
+  private faceTangents(normal: XYZA): XYZA[] {
+    if (Math.abs(normal[0]) > 0.5) {
+      return [
+        [0, 1, 0],
+        [0, 0, 1],
+      ];
+    }
+    if (Math.abs(normal[1]) > 0.5) {
+      return [
+        [1, 0, 0],
+        [0, 0, 1],
+      ];
+    }
+    return [
+      [1, 0, 0],
+      [0, 1, 0],
+    ];
+  }
+
+  private addDiffractRay(
+    map: Map<number, BandEnergy>,
+    ox: number,
+    oy: number,
+    oz: number,
+    dir: XYZA,
+    power: BandEnergy,
+  ): void {
+    const d = normalizeDir([dir[0], dir[1], dir[2]]);
+    const maxT = ACOUSTIC_DIFFRACT_MAX_DIST;
     traverseVoxels(ox, oy, oz, d[0], d[1], d[2], maxT, (ctx) => {
       const [cx, cy, cz] = [ctx.x, ctx.y, ctx.z];
       if (!inBounds(cx, cy, cz)) return true;

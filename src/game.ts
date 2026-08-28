@@ -27,6 +27,7 @@ import type { AcousticEvent, AcousticTuning, BandEnergy, EnergyField } from './a
 import { findStandingSpawn, generateWorld } from './worldgen';
 import type { GeneratedWorld } from './worldgen';
 import {
+  ACOUSTIC_TUNING_RANGES,
   AUTOSAVE_MOVE_INTERVAL_MS,
   INTERACTION_REACH,
   JUMP_BUFFER_MS,
@@ -231,6 +232,15 @@ export class Game {
     return this.energyField;
   }
 
+  /**
+   * 世界内容变更后的统一声学重算入口。
+   * 凡改变方块/设施/世界整体（放置、拆除、载入、重生、reset）都必须走这里，
+   * 避免把 recalcAcoustics 散落各处导致路径遗漏。
+   */
+  notifyWorldChanged(): EnergyField {
+    return this.recalcAcoustics();
+  }
+
   /** 清除全部声源（含固定环境源），并立即重算为空能量场。 */
   clearSources(): void {
     this.fixedSourcesEnabled = false;
@@ -260,10 +270,11 @@ export class Game {
     const p = patch as Record<string, unknown>;
     const cleaned: Partial<AcousticTuning> = {};
     const ranges: Array<[keyof AcousticTuning, number, number]> = [
-      ['G_ABSORB', 0.5, 3.0],
-      ['G_TRANS', 0.5, 2.0],
-      ['G_DIST_EXP', 1.0, 3.0],
-      ['G_DIFFRACT', 0, 2.0],
+      ['G_ABSORB', ACOUSTIC_TUNING_RANGES.G_ABSORB[0], ACOUSTIC_TUNING_RANGES.G_ABSORB[1]],
+      ['G_TRANS', ACOUSTIC_TUNING_RANGES.G_TRANS[0], ACOUSTIC_TUNING_RANGES.G_TRANS[1]],
+      ['G_DIST_EXP', ACOUSTIC_TUNING_RANGES.G_DIST_EXP[0], ACOUSTIC_TUNING_RANGES.G_DIST_EXP[1]],
+      ['G_DIFFRACT', ACOUSTIC_TUNING_RANGES.G_DIFFRACT[0], ACOUSTIC_TUNING_RANGES.G_DIFFRACT[1]],
+      ['fieldThreshold', ACOUSTIC_TUNING_RANGES.fieldThreshold[0], ACOUSTIC_TUNING_RANGES.fieldThreshold[1]],
     ];
     for (const [key, min, max] of ranges) {
       const v = p[key];
@@ -271,7 +282,10 @@ export class Game {
       if (typeof v !== 'number' || !Number.isFinite(v)) {
         throw new Error('setTuning: ' + key + ' 必须为有限数');
       }
-      cleaned[key] = Math.min(max, Math.max(min, v));
+      if (v < min || v > max) {
+        throw new Error('setTuning: ' + key + ' 超出允许区间 [' + String(min) + ', ' + String(max) + ']');
+      }
+      cleaned[key] = v;
     }
     this.acoustics.setTuning(cleaned);
     this.recalcAcoustics();
@@ -427,7 +441,7 @@ export class Game {
     const refund = BREAK_REFUND;
     this.inventory[material] = Math.max(0, this.inventory[material]) + refund;
     this.uiNotice = null; // 成功移除时清除旧的失败提示（QA Mn4）
-    this.recalcAcoustics();
+    this.notifyWorldChanged();
     this.autoSave();
   }
 
@@ -495,7 +509,7 @@ export class Game {
     this.world.putBlock(placeCell, id, dur);
     this.inventory[id] -= 1;
     this.uiNotice = null;
-    this.recalcAcoustics();
+    this.notifyWorldChanged();
     this.autoSave();
     return { ok: true, reason: 'ok' };
   }
@@ -579,7 +593,7 @@ export class Game {
     this.nextFacilityId += 1;
     this.inventory[itemId] -= 1;
     this.uiNotice = null;
-    this.recalcAcoustics();
+    this.notifyWorldChanged();
     this.autoSave();
     return { ok: true, reason: 'ok' };
   }
@@ -597,7 +611,7 @@ export class Game {
       return { ok: false, reason: res.reason };
     }
     this.uiNotice = null;
-    this.recalcAcoustics();
+    this.notifyWorldChanged();
     this.autoSave();
     return { ok: true, reason: 'ok' };
   }
@@ -617,7 +631,7 @@ export class Game {
     const itemId = facilityItemIdForKind(res.value!.kind);
     this.inventory[itemId] += 1;
     this.uiNotice = null;
-    this.recalcAcoustics();
+    this.notifyWorldChanged();
     this.autoSave();
     return { ok: true, reason: 'ok' };
   }
@@ -773,7 +787,7 @@ export class Game {
     // 时钟快照同样对齐，避免载入后立刻触发无意义写档。
     this.clock.markSaved();
     this.nextFacilityId = this.world.facilityStates().reduce((mx, f) => Math.max(mx, f.id), 0) + 1;
-    this.recalcAcoustics();
+    this.notifyWorldChanged();
     this.loadNotice = null;
     return 'loaded';
   }
@@ -837,6 +851,11 @@ export class Game {
   reset(): void {
     this.seedCounter = (this.seedCounter + 0x9e3779b9) >>> 0;
     this.overrides.clear();
+    // S4：先恢复固定环境源、清空调试源、恢复默认调谐，再 applyWorld；
+    // applyWorld 统一 notifyWorldChanged 时即可得到全新世界的正确能量场。
+    this.fixedSourcesEnabled = true;
+    this.debugSources = [];
+    this.acoustics.resetTuning();
     const next = generateWorld(this.seedCounter);
     this.applyWorld(next);
     this.inventory = new Array(13).fill(0) as number[];
@@ -852,11 +871,6 @@ export class Game {
       target: [this.spawn[0] + 0.5, this.spawn[1] + 2, this.spawn[2] + 0.5],
     };
     this.nextFacilityId = 1;
-    // S4：reset 恢复固定环境源、清空调试源、恢复默认调谐并重算能量场。
-    this.fixedSourcesEnabled = true;
-    this.debugSources = [];
-    this.acoustics.resetTuning();
-    this.recalcAcoustics();
     this.cancelMining();
     this.autoSave();
   }
@@ -874,6 +888,8 @@ export class Game {
     this.jumpBufferMs = 0;
     this.uiNotice = null;
     this.loadNotice = null;
+    // Blocker B1：世界替换（regenerate/applyWorld/reset 共用）后立即重算能量场。
+    this.notifyWorldChanged();
   }
 }
 
@@ -889,7 +905,13 @@ function coerceSourcePos(pos: unknown): XYZA {
   if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
     throw new Error('emitSource: pos 坐标必须为有限数');
   }
-  return [Math.floor(x), Math.floor(y), Math.floor(z)];
+  const fx = Math.floor(x);
+  const fy = Math.floor(y);
+  const fz = Math.floor(z);
+  if (!inBounds(fx, fy, fz)) {
+    throw new Error('emitSource: pos 超出世界边界');
+  }
+  return [fx, fy, fz];
 }
 
 /** S4：功率谱校验；缺省 [1,1,1]。 */

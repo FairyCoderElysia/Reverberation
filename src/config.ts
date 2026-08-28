@@ -73,7 +73,9 @@ export const ACOUSTIC_DEFAULT_PARAMS = {
   rays: 128,
   bounces: 3,
   diffract: true,
-  fieldThreshold: 0,
+  // 默认取 1e-6：低于 tech-design 附录的 1e-4，是为了保留 SP4-02/SP4-05 所要求的
+  // 远场 >1e-6 与遮挡后 >0 的低能量可读格；高于 0 仍能实现真实阈值稀疏化。
+  fieldThreshold: 1e-6,
 } as const;
 
 /** 声学全局缩放默认值（唯一夸张层；debug.setTuning 可覆写运行时副本）。 */
@@ -82,4 +84,21 @@ export const ACOUSTIC_DEFAULT_TUNING = {
   G_TRANS: 1.0,
   G_DIST_EXP: 2.0,
   G_DIFFRACT: 1.0,
+  fieldThreshold: 1e-6,
 } as const;
+
+/** 声学调谐参数允许区间（单一来源；超范围在 Game 层统一抛中文错误）。 */
+export const ACOUSTIC_TUNING_RANGES = {
+  G_ABSORB: [0.5, 3.0],
+  G_TRANS: [0.5, 2.0],
+  G_DIST_EXP: [1.0, 3.0],
+  G_DIFFRACT: [0.0, 2.0],
+  fieldThreshold: [0.0, 1e-3],
+} as const;
+
+/** S4 声学传播与绕射预算常量（单一来源；acoustics.ts 只引用，不散落写死）。 */
+export const ACOUSTIC_MAX_RAY_DIST = 160;
+export const ACOUSTIC_GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+export const ACOUSTIC_DIR_SPREAD = 0.45;
+export const ACOUSTIC_DIFFRACT_MAX_DIST = 6;
+export const ACOUSTIC_DIFFRACT_BEND = 0.25;

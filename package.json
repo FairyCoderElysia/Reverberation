@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "浏览器端 3D 体素声学沙盒生存游戏（Sprint 1 世界与材料底座）",
+  "description": "浏览器端 3D 体素声学沙盒生存游戏（Sprint 4：三频几何声学传播内核与能量场采样）",
   "scripts": {
     "dev": "vite",
     "build": "tsc -p tsconfig.json --noEmit && vite build",
