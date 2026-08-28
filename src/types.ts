@@ -54,10 +54,21 @@ export interface PlayerState {
   grounded: boolean;
 }
 
-/** 设施状态（S1 尚不产生设施，保留类型以备后续 sprint 复用） */
+/** 设施种类（S3 钉死：core/cannon/probe/duct/relay，与 tech-design §3.4 对齐） */
+export type FacilityKind = 'core' | 'cannon' | 'probe' | 'duct' | 'relay';
+
+/** 轨道俯瞰参数（state.orbit 形状；内部 target 为世界浮点坐标） */
+export interface OrbitState {
+  distance: number;
+  yaw: number;
+  pitch: number;
+  target: [number, number, number];
+}
+
+/** 设施状态（S1 尚不产生设施，S3 起用于基础放置/拆除/旋转；pos 为 gridId，cell 由 blockCoords 派生出外部形状） */
 export interface FacilityState {
   id: number;
-  kind: string;
+  kind: FacilityKind;
   pos: number;
   yaw: number;
   energy: number;
@@ -66,6 +77,19 @@ export interface FacilityState {
   linkFrom: number[];
   linkTo: number[];
   busState: 'idle' | 'active' | 'disabled';
+}
+
+/** 存档/外部设施快照：cell 为三轴格坐标，kind/yaw 与内部单一来源 */
+export interface FacilitySnapshot {
+  cell: XYZA;
+  kind: FacilityKind;
+  yaw: number;
+}
+
+/** 物品 id 元信息（1-7 材料来自 materials.ts，8-12 设施物品来自 recipes.ts） */
+export interface ItemDef {
+  id: number;
+  name: string;
 }
 
 /** 固定环境声源点 */

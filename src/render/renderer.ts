@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import type { GraphicTier, SoundSource, XYZA } from '../types';
+import type { FacilitySnapshot, GraphicTier, OrbitState, SoundSource, XYZA } from '../types';
 import { PIXEL_RATIO_HIGH_CAP, PIXEL_RATIO_LOW } from '../config';
-import { BAND_COLORS, hexToNumber, MATERIAL_COLORS } from '../theme';
+import { BAND_COLORS, FACILITY_COLORS, hexToNumber, MATERIAL_COLORS } from '../theme';
 import { blockIndex, WORLD_X, WORLD_Y, WORLD_Z } from '../world';
 
 export function detectWebGL2(): boolean {
@@ -28,6 +28,7 @@ export class Renderer {
   private camera: THREE.PerspectiveCamera;
   private container: HTMLElement;
   private meshes: THREE.InstancedMesh[] = [];
+  private facilityMeshes: THREE.Mesh[] = [];
   private markers: THREE.Object3D[] = [];
   private rafId = 0;
   private onFrame: (() => void) | null = null;
@@ -86,7 +87,17 @@ export class Renderer {
     this.camera.rotation.x = pitch;
   }
 
-  rebuildWorld(worldIds: Uint8Array): void {
+  /** 轨道俯瞰视图（F4B）：围绕 target 的球面相机，支持旋转/缩放/平移。 */
+  setOrbitView(orbit: OrbitState): void {
+    const horiz = Math.cos(orbit.pitch) * orbit.distance;
+    const x = orbit.target[0] + Math.sin(orbit.yaw) * horiz;
+    const y = orbit.target[1] + Math.sin(orbit.pitch) * orbit.distance;
+    const z = orbit.target[2] + Math.cos(orbit.yaw) * horiz;
+    this.camera.position.set(x, y, z);
+    this.camera.lookAt(orbit.target[0], orbit.target[1], orbit.target[2]);
+  }
+
+  rebuildWorld(worldIds: Uint8Array, facilities: FacilitySnapshot[] = []): void {
     if (!this.renderer) return;
     for (const m of this.meshes) {
       this.scene.remove(m);
@@ -94,6 +105,12 @@ export class Renderer {
       (m.material as THREE.Material).dispose();
     }
     this.meshes = [];
+    for (const f of this.facilityMeshes) {
+      this.scene.remove(f);
+      f.geometry.dispose();
+      (f.material as THREE.Material).dispose();
+    }
+    this.facilityMeshes = [];
     for (const mk of this.markers) this.scene.remove(mk);
     this.markers = [];
 
@@ -144,6 +161,23 @@ export class Renderer {
       this.scene.add(mesh);
       this.meshes.push(mesh);
       total += list.length;
+    }
+    for (const f of facilities) {
+      const [x, y, z] = f.cell;
+      if (
+        x < 0 || x >= WORLD_X ||
+        y < 0 || y >= WORLD_Y ||
+        z < 0 || z >= WORLD_Z
+      ) continue;
+      const geo = new THREE.BoxGeometry(0.9, 0.9, 0.9);
+      const mat = new THREE.MeshLambertMaterial({
+        color: hexToNumber(FACILITY_COLORS[f.kind] ?? '#ffffff'),
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(x + 0.5, y + 0.5, z + 0.5);
+      mesh.rotation.y = f.yaw;
+      this.scene.add(mesh);
+      this.facilityMeshes.push(mesh);
     }
     this.instances = total;
   }

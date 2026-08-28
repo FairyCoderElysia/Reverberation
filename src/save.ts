@@ -1,9 +1,12 @@
 /**
- * M9 存档（S2 初版）：单键 localStorage + schema version + RLE 二进制（ids/placed）。
- * S2 的 durability 不单独序列化（恢复时由材料常量派生）——contract SP2-07。
- * 损坏 / 版本不兼容回退为「无存档」并由调用方给中文提示，不白屏。
+ * M9 存档（S2 初版 + S3 v2 扩展）：单键 localStorage + schema version + RLE 二进制。
+ * S2：ids/placed 二进制，durability 不单独序列化（恢复时由材料常量派生）。
+ * S3：SAVE_VERSION=2，payload 增加 facilities（{cell,kind,yaw}）、timeOfDay、day，
+ *     并对旧 v1 档自动迁移（补零库存、selected 夹取、设施空、时间 0/day 0）。
+ * 损坏 / 版本 0、3+ 仍按 invalid 处理并中文提示，不白屏。
  */
 import { SAVE_KEY, SAVE_VERSION } from './config';
+import type { FacilitySnapshot, FacilityKind } from './types';
 
 /** 可注入存储（浏览器为 localStorage；测试可用内存 Map 替代）。 */
 export interface StorageLike {
@@ -23,6 +26,9 @@ export interface SavePayload {
   playerPos: [number, number, number];
   playerYaw: number;
   playerPitch: number;
+  facilities: FacilitySnapshot[];
+  timeOfDay: number;
+  day: number;
   savedAt: number;
 }
 
@@ -76,6 +82,32 @@ function finite(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v);
 }
 
+const FACILITY_KINDS: readonly string[] = ['core', 'cannon', 'probe', 'duct', 'relay'];
+
+function validFacilityKind(v: unknown): v is FacilityKind {
+  return typeof v === 'string' && (FACILITY_KINDS as readonly string[]).includes(v);
+}
+
+function parseFacilities(raw: unknown): FacilitySnapshot[] | null {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) return null;
+  const out: FacilitySnapshot[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') return null;
+    const o = item as Record<string, unknown>;
+    const cell = o.cell;
+    if (!Array.isArray(cell) || cell.length !== 3 || !finite(cell[0]) || !finite(cell[1]) || !finite(cell[2])) return null;
+    if (!validFacilityKind(o.kind)) return null;
+    if (!finite(o.yaw)) return null;
+    out.push({
+      cell: [cell[0], cell[1], cell[2]],
+      kind: o.kind,
+      yaw: o.yaw,
+    });
+  }
+  return out;
+}
+
 export interface ParseResult {
   ok: boolean;
   payload?: SavePayload;
@@ -91,12 +123,13 @@ export function parseSave(text: string): ParseResult {
     return { ok: false, error: '存档数据损坏（JSON 解析失败），已回退到全新世界。' };
   }
   const o = raw as Record<string, unknown>;
-  if (typeof o.version !== 'number' || o.version !== SAVE_VERSION) {
+  if (typeof o.version !== 'number' || (o.version !== 1 && o.version !== SAVE_VERSION)) {
     return {
       ok: false,
       error: '存档版本不兼容（version=' + String(o.version) + '，当前支持 v' + SAVE_VERSION + '），已回退到全新世界。',
     };
   }
+  const isV1 = o.version === 1;
   if (!finite(o.seed)) return { ok: false, error: '存档种子字段非法，已回退到全新世界。' };
 
   const ids = decodeRle(typeof o.idsB64 === 'string' ? o.idsB64 : '', WORLD_CELLS);
@@ -106,19 +139,45 @@ export function parseSave(text: string): ParseResult {
   }
 
   const inventoryRaw = Array.isArray(o.inventory) ? o.inventory : [];
-  const inventory: number[] = new Array(8).fill(0);
-  for (let i = 1; i <= 7; i++) {
+  const inventory: number[] = new Array(13).fill(0);
+  const maxCopy = isV1 ? 7 : 12;
+  for (let i = 1; i <= maxCopy; i++) {
     const v = inventoryRaw[i];
     inventory[i] = finite(v) && v > 0 ? Math.floor(v) : 0;
   }
+
   const selected =
-    finite(o.selected) && Number.isInteger(o.selected) && o.selected >= 1 && o.selected <= 7 ? o.selected : 1;
+    finite(o.selected) && Number.isInteger(o.selected)
+      ? isV1
+        ? o.selected >= 1 && o.selected <= 7
+          ? o.selected
+          : 1
+        : o.selected >= 1 && o.selected <= 12
+          ? o.selected
+          : 1
+      : 1;
 
   const posRaw = Array.isArray(o.playerPos) ? o.playerPos : null;
   const playerPos: [number, number, number] =
     posRaw && posRaw.length === 3 && finite(posRaw[0]) && finite(posRaw[1]) && finite(posRaw[2])
       ? [posRaw[0], posRaw[1], posRaw[2]]
       : [32, 12, 32];
+
+  const facilities = parseFacilities(o.facilities);
+  if (!facilities) {
+    return { ok: false, error: '存档设施数据损坏，已回退到全新世界。' };
+  }
+
+  const timeOfDay = isV1
+    ? 0
+    : finite(o.timeOfDay)
+      ? Math.min(0.999999, Math.max(0, o.timeOfDay))
+      : 0;
+  const day = isV1
+    ? 0
+    : finite(o.day) && o.day > 0
+      ? Math.floor(o.day)
+      : 0;
 
   return {
     ok: true,
@@ -132,12 +191,15 @@ export function parseSave(text: string): ParseResult {
       playerPos,
       playerYaw: finite(o.playerYaw) ? o.playerYaw : 0,
       playerPitch: finite(o.playerPitch) ? o.playerPitch : 0,
+      facilities,
+      timeOfDay,
+      day,
       savedAt: finite(o.savedAt) ? o.savedAt : 0,
     },
   };
 }
 
-/** 序列化存档（世界里数组 → RLE + base64 → JSON 字符串）。 */
+/** 序列化存档（世界里数组 → RLE + base64 + 设施/时钟 → JSON 字符串）。 */
 export function serializeSave(p: SavePayload): string {
   return JSON.stringify({
     version: p.version,
@@ -149,6 +211,9 @@ export function serializeSave(p: SavePayload): string {
     playerPos: p.playerPos,
     playerYaw: p.playerYaw,
     playerPitch: p.playerPitch,
+    facilities: p.facilities,
+    timeOfDay: p.timeOfDay,
+    day: p.day,
     savedAt: p.savedAt,
   });
 }

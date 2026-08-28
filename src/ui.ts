@@ -1,9 +1,11 @@
 /**
- * M10（最小子集）：材料参数面板 + 库存栏 + 准星反馈（中文）。
- * 全部数据与 state 同源（材料面板读 effectiveMaterials，库存栏读 state.inventory/selected），不写状态。
+ * M10（最小子集）：材料参数面板 + 库存栏 + 合成面板 + 准星反馈（中文）。
+ * 全部数据与 state 同源（材料面板读 effectiveMaterials，库存/配方读 state.inventory/selected），不写状态。
  */
 import { MATERIAL_ZH } from './materials';
-import { BAND_COLORS, MATERIAL_COLORS } from './theme';
+import { FACILITY_ITEM_IDS, itemName } from './recipes';
+import type { Recipe } from './recipes';
+import { BAND_COLORS, FACILITY_COLORS, MATERIAL_COLORS } from './theme';
 import type { MaterialSpec } from './types';
 import type { MaterialName } from './types';
 
@@ -49,7 +51,7 @@ export function renderMaterialPanel(specs: MaterialSpec[]): void {
 }
 
 /**
- * 渲染库存栏（SP2-06）：各材料数量 + 当前选中高亮。
+ * 渲染库存栏（SP2-06 / S3 物品扩展）：1-12 物品数量 + 当前选中高亮。
  * 与 state.inventory / state.selected 同源；点击回调切换选中（仅转发意图）。
  */
 export function renderInventory(
@@ -59,20 +61,50 @@ export function renderInventory(
 ): void {
   const el = document.getElementById('inventory-bar');
   if (!el) return;
-  const names = Object.keys(MATERIAL_ZH) as MaterialName[];
-  const slots = [1, 2, 3, 4, 5, 6, 7]
+  const slots = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     .map((id) => {
-      const zh = MATERIAL_ZH[names[id - 1]];
+      const zh = itemName(id);
       const n = inventory[id] ?? 0;
       const sel = id === selected ? 'slot-selected' : '';
-      return `<div class="slot ${sel}" data-id="${id}" title="${zh}（数字键 ${id}）"><span class="slot-count">${n}</span><span class="slot-name" style="--c:${colorFor(id)}">${zh}</span></div>`;
+      const keyHint = id <= 9 ? `（数字键 ${id}）` : '（点击选择）';
+      return `<div class="slot ${sel}" data-id="${id}" title="${zh}${keyHint}"><span class="slot-count">${n}</span><span class="slot-name" style="--c:${colorFor(id)}">${zh}</span></div>`;
     })
     .join('');
-  el.innerHTML = `<div class="inv-head">库存（1-7 选择 / 点击切换）</div><div class="inv-slots">${slots}</div>`;
+  el.innerHTML = `<div class="inv-head">库存（1-9 热键 / 点击切换）</div><div class="inv-slots">${slots}</div>`;
   el.querySelectorAll<HTMLElement>('.slot').forEach((node) => {
     node.addEventListener('click', () => {
       const id = Number(node.getAttribute('data-id'));
-      if (Number.isInteger(id) && id >= 1 && id <= 7) onSelect(id);
+      if (Number.isInteger(id) && id >= 1 && id <= 12) onSelect(id);
+    });
+  });
+}
+
+/** 渲染合成面板（F5）：显示 5 个配方与材料清单，点击合成按钮转发 craft 意图。 */
+export function renderRecipes(
+  recipes: readonly Recipe[],
+  inventory: number[],
+  onCraft: (recipeId: number) => void,
+): void {
+  const el = document.getElementById('recipe-panel');
+  if (!el) return;
+  const html = recipes
+    .map((r) => {
+      const ings = r.ingredients
+        .map((ing) => {
+          const enough = (inventory[ing.itemId] ?? 0) >= ing.qty;
+          const cn = itemName(ing.itemId);
+          return `<span class="ing ${enough ? '' : 'ing-missing'}">${cn}×${ing.qty}</span>`;
+        })
+        .join(' ');
+      const outName = itemName(r.output.itemId);
+      return `<div class="recipe"><div class="recipe-name">${r.name}<button class="craft-btn" data-recipe="${r.id}">合成</button></div><div class="recipe-ing">${ings} → ${outName}×${r.output.count}</div></div>`;
+    })
+    .join('');
+  el.innerHTML = `<div class="panel-head">合成（F5 设施物品）</div>${html}`;
+  el.querySelectorAll<HTMLButtonElement>('.craft-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = Number(btn.getAttribute('data-recipe'));
+      if (Number.isInteger(id)) onCraft(id);
     });
   });
 }
@@ -105,7 +137,12 @@ export function renderStatus(message: string | null): void {
 }
 
 function colorFor(id: number): string {
-  return MATERIAL_COLORS[id - 1] ?? '#fff';
+  if (id >= 1 && id <= 7) return MATERIAL_COLORS[id - 1] ?? '#fff';
+  const ids = FACILITY_ITEM_IDS;
+  for (const kind of ['core', 'cannon', 'probe', 'duct', 'relay'] as const) {
+    if (ids[kind] === id) return FACILITY_COLORS[kind] ?? '#fff';
+  }
+  return '#fff';
 }
 
 function legColor(id: number): string {

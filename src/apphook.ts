@@ -8,9 +8,10 @@ import { effectiveRows, MATERIAL_TABLE, validateTable } from './materials';
 import { mergeTriplet } from './materials';
 import type { MaterialOverrides } from './materials';
 import type { Game } from './game';
-import { INTERACTION_REACH } from './config';
-import type { GraphicTier, PerfState, SoundSource, XYZA } from './types';
+import { DAY_LENGTH_SECONDS, INTERACTION_REACH } from './config';
+import type { FacilityKind, FacilitySnapshot, GraphicTier, OrbitState, PerfState, SoundSource, XYZA } from './types';
 import type { BlockRef } from './types';
+import { FACILITY_DEFS, RECIPES } from './recipes';
 
 export interface AppState {
   seed: number;
@@ -24,10 +25,26 @@ export interface AppState {
     yaw: number;
     pitch: number;
     grounded: boolean;
+    /** S3：当前视角模式（'first' | 'orbit'） */
+    viewMode: 'first' | 'orbit';
   };
-  /** S2：库存（副本，index 1..7 为材料数量） */
+  /** S3：轨道俯瞰参数（只读投影） */
+  orbit: OrbitState;
+  /** S3：全天相位 [0,1) */
+  timeOfDay: number;
+  /** S3：天数（从 0 开始） */
+  day: number;
+  /** S3：全天时长秒数（只读） */
+  dayLengthSeconds: number;
+  /** S3：配方表（与合成 UI 同源） */
+  recipes: ReturnType<typeof recipeCopies>;
+  /** S3：设施能力定义（全部 implemented:false / abilities 全 false） */
+  facilityDefs: ReturnType<typeof facilityDefCopies>;
+  /** S3：已放置设施快照（{cell,kind,yaw}，cell 单一来源） */
+  facilities: FacilitySnapshot[];
+  /** S2：库存（副本，index 1..12 为物品数量） */
   inventory: number[];
-  /** S2：当前选中材料 id（1..7） */
+  /** S2：当前选中物品 id（1..12） */
   selected: number;
   /** S2：放置方块计数（与 world.placed 同一增量来源） */
   placedBlocks: number;
@@ -69,12 +86,39 @@ export interface DebugHooks {
   loadSave: () => 'loaded' | 'empty' | 'invalid';
   clearSave: () => void;
   teleport: (pos: XYZA) => void;
+  // S3 增量
+  setViewMode: (mode: 'first' | 'orbit') => void;
+  setOrbit: (patch: Partial<OrbitState>) => void;
+  craft: (recipeId: number) => { ok: boolean; reason: string };
+  placeFacility: (kind: FacilityKind, cell: XYZA, yaw?: number) => { ok: boolean; reason: string };
+  rotateFacility: (cell: XYZA, deltaRadians?: number) => { ok: boolean; reason: string };
+  removeFacility: (cell: XYZA) => { ok: boolean; reason: string };
 }
 
 export interface __App {
   state: AppState;
   reset: () => void;
   debug: DebugHooks;
+}
+
+function recipeCopies() {
+  return RECIPES.map((r) => ({
+    id: r.id,
+    name: r.name,
+    ingredients: r.ingredients.map((i) => ({ itemId: i.itemId, qty: i.qty })),
+    output: { ...r.output },
+  }));
+}
+
+function facilityDefCopies() {
+  return FACILITY_DEFS.map((f) => ({
+    id: f.id,
+    kind: f.kind,
+    name: f.name,
+    itemId: f.itemId,
+    implemented: false as const,
+    abilities: { ...f.abilities },
+  }));
 }
 
 /** 构建 __app（Game 就绪后调用）。 */
@@ -135,7 +179,34 @@ export function buildApp(
         yaw: game.body.yaw,
         pitch: game.body.pitch,
         grounded: game.body.grounded,
+        viewMode: game.viewMode,
       };
+    },
+    get orbit() {
+      return {
+        distance: game.orbit.distance,
+        yaw: game.orbit.yaw,
+        pitch: game.orbit.pitch,
+        target: [game.orbit.target[0], game.orbit.target[1], game.orbit.target[2]] as [number, number, number],
+      };
+    },
+    get timeOfDay() {
+      return game.timeOfDay;
+    },
+    get day() {
+      return game.day;
+    },
+    get dayLengthSeconds() {
+      return DAY_LENGTH_SECONDS;
+    },
+    get recipes() {
+      return recipeCopies();
+    },
+    get facilityDefs() {
+      return facilityDefCopies();
+    },
+    get facilities() {
+      return game.facilitySnapshots().map((f) => ({ cell: [...f.cell] as XYZA, kind: f.kind, yaw: f.yaw }));
     },
     get inventory() {
       return game.inventory.slice();
@@ -234,6 +305,24 @@ export function buildApp(
     },
     teleport: (pos) => {
       game.teleport(pos);
+    },
+    setViewMode: (mode) => {
+      game.setViewMode(mode);
+    },
+    setOrbit: (patch) => {
+      game.setOrbit(patch ?? {});
+    },
+    craft: (recipeId) => {
+      return game.craft(recipeId);
+    },
+    placeFacility: (kind, cell, yaw) => {
+      return game.placeFacility(kind, cell, yaw);
+    },
+    rotateFacility: (cell, deltaRadians) => {
+      return game.rotateFacility(cell, deltaRadians);
+    },
+    removeFacility: (cell) => {
+      return game.removeFacility(cell);
     },
   };
 

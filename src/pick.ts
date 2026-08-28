@@ -1,6 +1,7 @@
 /**
- * M6（S2）：体素拾取（唯一 DDA 实现处——复用 world.traverseVoxels）。
+ * M6（S2/S3）：体素拾取（唯一 DDA 实现处——复用 world.traverseVoxels）。
  * 本模块不自行实现第二套射线遍历。
+ * S3：拾取把设施格视为实体（blockAt.material !== 0 || facility !== null）。
  */
 import { traverseVoxels } from './world';
 import type { World } from './world';
@@ -12,7 +13,7 @@ export interface PickHit {
 }
 
 /**
- * 从原点沿单位方向做 DDA，返回首个实体方块命中（不含起点格自身）。
+ * 从原点沿单位方向做 DDA，返回首个实体命中（方块或设施，不含起点格自身）。
  * 原点应落在空气格（玩家眼睛）；face>=0 表示从空气进入实体。
  */
 export function pickBlock(
@@ -23,7 +24,9 @@ export function pickBlock(
 ): PickHit | null {
   let hit: PickHit | null = null;
   traverseVoxels(origin[0], origin[1], origin[2], dir[0], dir[1], dir[2], maxDist, (ctx) => {
-    if (ctx.face >= 0 && world.blockAt([ctx.x, ctx.y, ctx.z]).material !== 0) {
+    if (ctx.face < 0) return false;
+    const b = world.blockAt([ctx.x, ctx.y, ctx.z]);
+    if (b.material !== 0 || b.facility !== null) {
       hit = { cell: [ctx.x, ctx.y, ctx.z], face: ctx.face, dist: ctx.t };
       return true;
     }

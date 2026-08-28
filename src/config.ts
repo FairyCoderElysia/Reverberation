@@ -51,9 +51,17 @@ export const JUMP_BUFFER_MS = 150;
 /** 移动自动存档节流（ms）：玩家位置/朝向发生变化后，至少间隔该时长才写一次档（避免每帧写档）。 */
 export const AUTOSAVE_MOVE_INTERVAL_MS = 2000;
 
+/** S3 最小时钟：全天相位时长（秒）—— 420s = 7 分钟（terr-design DAY_LEN/NIGHT_LEN 210+210）。 */
+export const DAY_LENGTH_SECONDS = 420;
+
 /** 存档序列化体积预警阈值（字节）：超过在状态行提示，不阻塞写档 */
 export const SAVE_SIZE_WARN_BYTES = 40 * 1024;
 
 /** 单档存档键与 schema 版本 */
 export const SAVE_KEY = 'voice.save.v1';
-export const SAVE_VERSION = 1;
+export const SAVE_VERSION = 2;
+
+/** 轨道俯瞰默认参数（F4B）：距离/初始偏航/俯仰；target 由 Game 启动时设为玩家出生点附近。 */
+export const ORBIT_DEFAULT_DISTANCE = 42;
+export const ORBIT_DEFAULT_YAW = Math.PI * 0.25;
+export const ORBIT_DEFAULT_PITCH = 0.62;

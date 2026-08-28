@@ -50,7 +50,8 @@ export function aabbIntersects(world: World, pos: [number, number, number]): boo
   for (let y = y0; y <= y1; y++) {
     for (let z = z0; z <= z1; z++) {
       for (let x = x0; x <= x1; x++) {
-        if (world.blockAt([x, y, z]).material !== 0) return true;
+        const b = world.blockAt([x, y, z]);
+        if (b.material !== 0 || b.facility !== null) return true;
       }
     }
   }
@@ -73,7 +74,8 @@ export function groundSupportY(world: World, pos: [number, number, number]): num
   for (let y = Math.floor(pos[1]) - 1; y >= 0; y--) {
     for (let z = z0; z <= z1; z++) {
       for (let x = x0; x <= x1; x++) {
-        if (world.blockAt([x, y, z]).material !== 0) return y + 1;
+        const b = world.blockAt([x, y, z]);
+        if (b.material !== 0 || b.facility !== null) return y + 1;
       }
     }
   }

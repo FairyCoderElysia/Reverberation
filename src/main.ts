@@ -7,7 +7,7 @@ import type { __App } from './apphook';
 import { generateWorld } from './worldgen';
 import { Game } from './game';
 import { Renderer } from './render/renderer';
-import { inventorySignature, renderInventory, renderMaterialPanel, renderMiningProgress, renderStatus, shouldRefreshInventory } from './ui';
+import { inventorySignature, renderInventory, renderMaterialPanel, renderMiningProgress, renderRecipes, renderStatus, shouldRefreshInventory } from './ui';
 import { LOOK_SENSITIVITY } from './config';
 import type { GraphicTier } from './types';
 
@@ -47,7 +47,7 @@ function bootInner(): void {
   const app: __App = buildApp(
     game,
     (g) => {
-      renderer.rebuildWorld(g.world.ids);
+      renderer.rebuildWorld(g.world.ids, g.world.facilityList());
       renderer.addSourceMarkers(g.soundSources, g.spawn);
       lastWorldRev = g.world.revision;
     },
@@ -62,7 +62,7 @@ function bootInner(): void {
   window.__app = app;
 
   // 8. 首帧世界快照 + 面板
-  renderer.rebuildWorld(game.world.ids);
+  renderer.rebuildWorld(game.world.ids, game.world.facilityList());
   renderer.addSourceMarkers(game.soundSources, game.spawn);
   renderMaterialPanel(app.state.materials);
   lastWorldRev = game.world.revision;
@@ -76,6 +76,9 @@ function bootInner(): void {
     game.selected = id;
   }
   renderInventory(app.state.inventory, app.state.selected, selectHandler);
+  renderRecipes(app.state.recipes, game.inventory, (recipeId) => {
+    game.craft(recipeId);
+  });
 
   // 载入结果的中文提示（损坏/版本不兼容可见、不白屏）；优先级同样是存档异常优先
   renderStatus(game.saveError ?? game.loadNotice ?? game.uiNotice);
@@ -95,9 +98,13 @@ function bootInner(): void {
     // 用户实测热修：世界内容在运行时被放置/挖掘等修改后，下一帧立即重建 3D 场景。
     if (game.world.revision !== lastWorldRev) {
       lastWorldRev = game.world.revision;
-      renderer.rebuildWorld(game.world.ids);
+      renderer.rebuildWorld(game.world.ids, game.world.facilityList());
     }
-    renderer.setView(game.playerEye(), game.body.yaw, game.body.pitch);
+    if (game.viewMode === 'orbit') {
+      renderer.setOrbitView(game.orbit);
+    } else {
+      renderer.setView(game.playerEye(), game.body.yaw, game.body.pitch);
+    }
 
     frameCount += 1;
     accMs += dtMs;
@@ -119,6 +126,9 @@ function bootInner(): void {
       lastInvSig = invSig;
       lastSelected = game.selected;
       refreshInventory();
+      renderRecipes(app.state.recipes, game.inventory, (recipeId) => {
+        game.craft(recipeId);
+      });
     }
     // 优先级：存档/载入异常 > 交互提示，避免 uiNotice 长期遮蔽 saveError/loadNotice（QA Mn4）
     renderStatus(game.saveError ?? game.loadNotice ?? game.uiNotice);
@@ -164,10 +174,16 @@ function bindInput(game: Game, renderer: Renderer): void {
     }
     if (e.code.startsWith('Digit')) {
       const n = Number(e.code.slice(5));
-      if (n >= 1 && n <= 7) {
-        // 只改 selected；onFrame 下一帧统一检测并刷新库存栏（Mn2 去重复回流）
+      if (n >= 1 && n <= 9) {
+        // S3：1-9 热键选物品；10-12 走库存槽点击（contract UI 约定）
         game.selected = n;
       }
+    }
+    if (e.code === 'KeyC') {
+      if (!e.repeat) game.toggleViewMode();
+    }
+    if (e.code === 'KeyR') {
+      if (!e.repeat) game.rotateLookedFacility();
     }
     keys.add(e.code);
     syncKeys();
@@ -187,6 +203,8 @@ function bindInput(game: Game, renderer: Renderer): void {
   let rightMoved = 0;
   let lastX = 0;
   let lastY = 0;
+  let orbitRotating = false;
+  let orbitPanning = false;
   const DRAG_PLACE_THRESHOLD = 4; // px：右键位移小于此视为「点击放置」
 
   const rotate = (dx: number, dy: number): void => {
@@ -196,6 +214,18 @@ function bindInput(game: Game, renderer: Renderer): void {
 
   if (canvas) {
     canvas.addEventListener('pointerdown', (e) => {
+      if (game.viewMode === 'orbit') {
+        if (e.button === 0) {
+          orbitRotating = true;
+          lastX = e.clientX;
+          lastY = e.clientY;
+        } else if (e.button === 2) {
+          orbitPanning = true;
+          lastX = e.clientX;
+          lastY = e.clientY;
+        }
+        return;
+      }
       if (e.button === 0) {
         game.mineHeld = true;
       } else if (e.button === 2) {
@@ -205,7 +235,19 @@ function bindInput(game: Game, renderer: Renderer): void {
         lastY = e.clientY;
       }
     });
+    canvas.addEventListener('wheel', (e) => {
+      if (game.viewMode !== 'orbit') return;
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? 3 : e.deltaY < 0 ? -3 : 0;
+      game.setOrbit({ distance: game.orbit.distance + delta });
+    }, { passive: false });
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    const viewBtn = document.getElementById('view-toggle');
+    if (viewBtn) {
+      viewBtn.addEventListener('click', () => {
+        game.toggleViewMode();
+      });
+    }
     canvas.addEventListener('click', () => {
       if (!pointerLocked && document.pointerLockElement !== canvas) {
         try {
@@ -221,6 +263,33 @@ function bindInput(game: Game, renderer: Renderer): void {
   }
 
   window.addEventListener('pointermove', (e) => {
+    if (orbitRotating || orbitPanning) {
+      const dx = e.clientX - lastX;
+      const dy = e.clientY - lastY;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      if (orbitRotating) {
+        game.setOrbit({
+          yaw: game.orbit.yaw - dx * LOOK_SENSITIVITY,
+          pitch: game.orbit.pitch - dy * LOOK_SENSITIVITY,
+        });
+      } else if (orbitPanning) {
+        const theta = game.orbit.yaw;
+        const fx = -Math.sin(theta);
+        const fz = -Math.cos(theta);
+        const rx = Math.cos(theta);
+        const rz = -Math.sin(theta);
+        const scale = 0.08;
+        game.setOrbit({
+          target: [
+            game.orbit.target[0] - rx * dx * scale + fx * dy * scale,
+            game.orbit.target[1],
+            game.orbit.target[2] - rz * dx * scale + fz * dy * scale,
+          ],
+        });
+      }
+      return;
+    }
     if (pointerLocked) {
       rotate(e.movementX, e.movementY);
     } else if (rightDragging) {
@@ -231,6 +300,11 @@ function bindInput(game: Game, renderer: Renderer): void {
     }
   });
   window.addEventListener('pointerup', (e) => {
+    if (orbitRotating || orbitPanning) {
+      if (e.button === 0) orbitRotating = false;
+      if (e.button === 2) orbitPanning = false;
+      return;
+    }
     if (e.button === 0) {
       game.mineHeld = false;
       game.cancelMining();
@@ -246,6 +320,8 @@ function bindInput(game: Game, renderer: Renderer): void {
     pointerLocked = !!canvas && document.pointerLockElement === canvas;
     rightDragging = false;
     rightMoved = 0;
+    orbitRotating = false;
+    orbitPanning = false;
     game.mineHeld = false;
   });
   document.addEventListener('pointerlockerror', () => {

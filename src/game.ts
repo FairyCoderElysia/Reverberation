@@ -10,13 +10,18 @@ import { pickBlock, placeCellFromHit } from './pick';
 import type { PickHit } from './pick';
 import { parseSave, readSaveRaw, removeSave, serializeSave, writeSaveRaw } from './save';
 import type { SavePayload, StorageLike } from './save';
+import { FACILITY_ITEM_IDS, FACILITY_KIND_BY_ITEM, RECIPES, isFacilityKind, itemName } from './recipes';
 import { findStandingSpawn, generateWorld } from './worldgen';
 import type { GeneratedWorld } from './worldgen';
 import {
   AUTOSAVE_MOVE_INTERVAL_MS,
+  DAY_LENGTH_SECONDS,
   INTERACTION_REACH,
   JUMP_BUFFER_MS,
   MINING_SECONDS,
+  ORBIT_DEFAULT_DISTANCE,
+  ORBIT_DEFAULT_PITCH,
+  ORBIT_DEFAULT_YAW,
   PLAYER_PHYS_HZ,
   PLAYER_EYE_HEIGHT,
   PLAYER_HALF_WIDTH,
@@ -25,7 +30,7 @@ import {
   SAVE_VERSION,
 } from './config';
 import { inBounds, World, WORLD_X, WORLD_Y, WORLD_Z } from './world';
-import type { SoundSource, XYZA } from './types';
+import type { FacilityKind, FacilitySnapshot, OrbitState, SoundSource, XYZA } from './types';
 
 export interface GameOptions {
   storage?: StorageLike;
@@ -83,6 +88,27 @@ export class Game {
   loadNotice: string | null;
   /** 交互类可见提示（挖掘/放置失败原因等），与存档异常字段 saveError 分离 */
   uiNotice: string | null;
+  /** S3：当前视角模式（F4B）。切换只改变视角，不暂停游戏、不改 body.pos。 */
+  viewMode: 'first' | 'orbit' = 'first';
+  /** S3：轨道俯瞰参数（state.orbit 同源）。 */
+  orbit: OrbitState = {
+    distance: ORBIT_DEFAULT_DISTANCE,
+    yaw: ORBIT_DEFAULT_YAW,
+    pitch: ORBIT_DEFAULT_PITCH,
+    target: [32.5, 13, 32.5],
+  };
+  /** S3：全天相位 [0,1)，从 0 开始随现实时间递增；回绕时 day+1。 */
+  timeOfDay = 0;
+  /** S3：存活天数（从 0 开始）。 */
+  day = 0;
+  /** S3：设施内部 id 分配器（载入后基于已有设施最大 id +1）。 */
+  nextFacilityId = 1;
+  /** 时钟相对最近一次成功写档是否有变化（S3 静止也节流写档）。 */
+  private clockDirty = false;
+  /** 自上次成功写档后累计的时钟节流毫秒数。 */
+  private clockAutosaveAccumMs = 0;
+  /** 最近一次成功写档时的 [timeOfDay, day] 快照（S3 时钟自动存档）。 */
+  private lastSavedClockSnapshot: [number, number] | null = null;
 
   overrides: Map<number, MaterialOverrides>;
   private seedCounter: number;
@@ -112,8 +138,10 @@ export class Game {
     this.body = makeBodyAtSpawn(generated.spawn, this.world);
     // 初始移动快照对齐出生点：未发生移动前不触发移动节流写档。
     this.lastSavedMoveState = this.moveStateTuple();
-    this.inventory = new Array(8).fill(0) as number[];
+    this.inventory = new Array(13).fill(0) as number[];
     this.selected = 1;
+    this.orbit.target = [this.spawn[0] + 0.5, this.spawn[1] + 2, this.spawn[2] + 0.5];
+    this.lastSavedClockSnapshot = this.clockTuple();
     this.miningProgress = 0;
     this.miningTarget = null;
     this.lastSavedAt = 0;
@@ -167,7 +195,9 @@ export class Game {
       stepPlayer(this.body, physInput, 1 / PLAYER_PHYS_HZ, this.world);
       this.jumpBufferMs = physInput.jumpBufferMs ?? 0;
     }
+    this.advanceClock(dt);
     this.updateMoveAutoSave(dt);
+    this.updateClockAutoSave(dt);
     this.updateMining(dt / 1000);
     if (this.placePressed) {
       this.placePressed = false;
@@ -211,8 +241,8 @@ export class Game {
   }
 
   giveItem(id: number, n: number): void {
-    if (!Number.isInteger(id) || id < 1 || id > 7) {
-      throw new Error('giveItem: 材料 id 非法（需为 1..7 的整数）');
+    if (!Number.isInteger(id) || id < 1 || id > 12) {
+      throw new Error('giveItem: 物品 id 非法（需为 1..12 的整数）');
     }
     if (typeof n !== 'number' || !Number.isFinite(n)) {
       throw new Error('giveItem: 数量必须为有限数');
@@ -242,6 +272,11 @@ export class Game {
       return;
     }
     const b = this.world.blockAt(hit.cell);
+    if (b.material === 0) {
+      // S3：设施格不是可挖掘方块；挖掘进度不针对设施（拆除走 removeFacility）。
+      this.cancelMining();
+      return;
+    }
     const t: MineTarget = { cell: hit.cell, material: b.material, placed: b.placed };
     if (!this.targetMatches(t)) {
       this.miningTarget = t;
@@ -292,14 +327,36 @@ export class Game {
 
   /* ================= 放置 ================= */
 
+  /** 合成（F5）：从 recipes.ts 唯一配方表扣材料、产设施物品。 */
+  craft(recipeId: number): { ok: boolean; reason: string } {
+    const recipe = RECIPES.find((r) => r.id === recipeId);
+    if (!recipe) {
+      this.uiNotice = '配方不存在（id=' + String(recipeId) + '）';
+      return { ok: false, reason: '配方不存在' };
+    }
+    for (const ing of recipe.ingredients) {
+      if ((this.inventory[ing.itemId] ?? 0) < ing.qty) {
+        this.uiNotice = '材料不足：无法合成「' + recipe.name + '」，缺少 ' + itemName(ing.itemId) + ' ×' + String(ing.qty);
+        return { ok: false, reason: '材料不足' };
+      }
+    }
+    for (const ing of recipe.ingredients) {
+      this.inventory[ing.itemId] -= ing.qty;
+    }
+    this.inventory[recipe.output.itemId] += recipe.output.count;
+    this.uiNotice = null;
+    this.autoSave();
+    return { ok: true, reason: 'ok' };
+  }
+
   tryPlaceSelected(): { ok: boolean; reason: string } {
     const id = this.selected;
-    if (id < 1 || id > 7) {
-      this.uiNotice = '尚未选中任何材料（按 1-7 或点击库存槽选中）';
-      return { ok: false, reason: '未选中任何材料' };
+    if (id < 1 || id > 12) {
+      this.uiNotice = '尚未选中任何物品（按 1-9 或点击库存槽选中）';
+      return { ok: false, reason: '未选中任何物品' };
     }
     if (this.inventory[id] <= 0) {
-      this.uiNotice = '库存不足：无法放置「' + this.materialNameZh(id) + '」';
+      this.uiNotice = '库存不足：无法放置「' + this.itemNameZh(id) + '」';
       return { ok: false, reason: '库存不足' };
     }
     const hit = this.pickLook();
@@ -312,13 +369,17 @@ export class Game {
       this.uiNotice = '目标格越界，无法放置';
       return { ok: false, reason: '目标格越界' };
     }
-    if (this.world.blockAt(placeCell).material !== 0) {
-      this.uiNotice = '目标格已有方块，无法放置';
+    if (this.world.blockAt(placeCell).material !== 0 || this.world.blockAt(placeCell).facility !== null) {
+      this.uiNotice = '目标格已有方块/设施，无法放置';
       return { ok: false, reason: '目标格已有方块' };
     }
     if (cellOverlapsPlayer(this.body.pos, placeCell)) {
       this.uiNotice = '不能放置到玩家身体内';
       return { ok: false, reason: '不能放置到玩家身体内' };
+    }
+    if (id >= 8 && id <= 12) {
+      const kind = FACILITY_KIND_BY_ITEM[id];
+      return this.placeFacilityAtCell(kind, placeCell, 0);
     }
     const dur = this.materialSpecs()[id - 1].durability;
     this.world.putBlock(placeCell, id, dur);
@@ -332,6 +393,189 @@ export class Game {
   materialNameZh(id: number): string {
     const row = MATERIAL_TABLE[id - 1];
     return row ? MATERIAL_ZH[row.name] : '未知';
+  }
+
+  /** 物品中文名（1-7 材料 + 8-12 设施物品，来自 recipes.ts/ITEM_NAMES）。 */
+  itemNameZh(id: number): string {
+    if (id >= 1 && id <= 7) return this.materialNameZh(id);
+    return itemName(id);
+  }
+
+  /** 视角模式切换（F4B）。 */
+  setViewMode(mode: 'first' | 'orbit'): void {
+    if (mode !== 'first' && mode !== 'orbit') {
+      throw new Error('setViewMode: 模式需为 first 或 orbit');
+    }
+    this.viewMode = mode;
+  }
+
+  toggleViewMode(): void {
+    this.viewMode = this.viewMode === 'first' ? 'orbit' : 'first';
+  }
+
+  /** 设置轨道俯瞰参数（不直接写 state，只改运行时；可逆）。 */
+  setOrbit(patch: Partial<OrbitState>): void {
+    if (patch.distance !== undefined) {
+      if (!Number.isFinite(patch.distance)) throw new Error('setOrbit: distance 必须为有限数');
+      this.orbit.distance = Math.min(200, Math.max(3, patch.distance));
+    }
+    if (patch.yaw !== undefined) {
+      if (!Number.isFinite(patch.yaw)) throw new Error('setOrbit: yaw 必须为有限数');
+      this.orbit.yaw = patch.yaw;
+    }
+    if (patch.pitch !== undefined) {
+      if (!Number.isFinite(patch.pitch)) throw new Error('setOrbit: pitch 必须为有限数');
+      this.orbit.pitch = Math.min(1.45, Math.max(-1.45, patch.pitch));
+    }
+    if (patch.target !== undefined) {
+      if (!Array.isArray(patch.target) || patch.target.length !== 3 || patch.target.some((v) => !Number.isFinite(v))) {
+        throw new Error('setOrbit: target 需为 [x,y,z] 有限数组');
+      }
+      this.orbit.target = [patch.target[0], patch.target[1], patch.target[2]];
+    }
+  }
+
+  /** 当前设施快照（cell 派生，单源）。 */
+  facilitySnapshots(): FacilitySnapshot[] {
+    return this.world.facilityList();
+  }
+
+  /** 调试/UI 放置设施（kind 必须合法；cell 为整数格；yaw 弧度缺省 0）。 */
+  placeFacility(kind: FacilityKind, cell: XYZA, yaw = 0): { ok: boolean; reason: string } {
+    if (!isFacilityKind(kind)) {
+      return { ok: false, reason: '设施类型非法' };
+    }
+    if (!cell || !Array.isArray(cell) || cell.length !== 3 || cell.some((v) => !Number.isFinite(v))) {
+      return { ok: false, reason: '设施坐标非法' };
+    }
+    return this.placeFacilityAtCell(kind, [Math.floor(cell[0]), Math.floor(cell[1]), Math.floor(cell[2])], yaw);
+  }
+
+  private placeFacilityAtCell(kind: FacilityKind, cell: XYZA, yaw: number): { ok: boolean; reason: string } {
+    if (!inBounds(cell[0], cell[1], cell[2])) {
+      this.uiNotice = '目标格越界，无法放置设施';
+      return { ok: false, reason: '目标格越界' };
+    }
+    if (this.world.blockAt(cell).material !== 0 || this.world.blockAt(cell).facility !== null) {
+      this.uiNotice = '目标格已有方块/设施，无法放置设施';
+      return { ok: false, reason: '目标格已有方块' };
+    }
+    if (cellOverlapsPlayer(this.body.pos, cell)) {
+      this.uiNotice = '不能放置到玩家身体内';
+      return { ok: false, reason: '不能放置到玩家身体内' };
+    }
+    const itemId = FACILITY_ITEM_IDS[kind];
+    if ((this.inventory[itemId] ?? 0) <= 0) {
+      this.uiNotice = '库存不足：无法放置「' + itemName(itemId) + '」';
+      return { ok: false, reason: '库存不足' };
+    }
+    const i = this.world.idx(cell[0], cell[1], cell[2]);
+    const f = {
+      id: this.nextFacilityId++,
+      kind,
+      pos: i,
+      yaw: normalizeYaw(yaw),
+      energy: 0,
+      coreHp: 0,
+      band: 3 as const,
+      linkFrom: [],
+      linkTo: [],
+      busState: 'idle' as const,
+    };
+    this.world.putFacility(f);
+    this.inventory[itemId] -= 1;
+    this.uiNotice = null;
+    this.autoSave();
+    return { ok: true, reason: 'ok' };
+  }
+
+  /** 调试/UI 旋转设施（缺省步长 π/2）。 */
+  rotateFacility(cell: XYZA, deltaRadians = Math.PI / 2): { ok: boolean; reason: string } {
+    if (!cell || !Array.isArray(cell) || cell.length !== 3 || cell.some((v) => !Number.isFinite(v))) {
+      this.uiNotice = '设施坐标非法，无法旋转';
+      return { ok: false, reason: '设施坐标非法' };
+    }
+    const cc: XYZA = [Math.floor(cell[0]), Math.floor(cell[1]), Math.floor(cell[2])];
+    const b = this.world.blockAt(cc);
+    if (!b.facility) {
+      this.uiNotice = '目标格没有设施，无法旋转';
+      return { ok: false, reason: '目标格没有设施' };
+    }
+    if (!Number.isFinite(deltaRadians)) {
+      throw new Error('rotateFacility: deltaRadians 必须为有限数');
+    }
+    const nextYaw = normalizeYaw(b.facility.yaw + deltaRadians);
+    this.world.updateFacilityYaw(cc, nextYaw);
+    this.uiNotice = null;
+    this.autoSave();
+    return { ok: true, reason: 'ok' };
+  }
+
+  /** 拆除设施（返还对应设施物品 id 8..12；S3 临时口径）。 */
+  removeFacility(cell: XYZA): { ok: boolean; reason: string } {
+    if (!cell || !Array.isArray(cell) || cell.length !== 3 || cell.some((v) => !Number.isFinite(v))) {
+      this.uiNotice = '设施坐标非法，无法拆除';
+      return { ok: false, reason: '设施坐标非法' };
+    }
+    const cc: XYZA = [Math.floor(cell[0]), Math.floor(cell[1]), Math.floor(cell[2])];
+    const removed = this.world.removeFacilityAt(cc);
+    if (!removed) {
+      this.uiNotice = '目标格没有设施，无法拆除';
+      return { ok: false, reason: '目标格没有设施' };
+    }
+    const itemId = FACILITY_ITEM_IDS[removed.kind];
+    this.inventory[itemId] += 1;
+    this.uiNotice = null;
+    this.autoSave();
+    return { ok: true, reason: 'ok' };
+  }
+
+  /** R 键：旋转准星正对/命中的设施。 */
+  rotateLookedFacility(): { ok: boolean; reason: string } {
+    const hit = this.pickLook();
+    if (!hit) {
+      this.uiNotice = '准星未命中设施，无法旋转';
+      return { ok: false, reason: '准星未命中设施' };
+    }
+    return this.rotateFacility(hit.cell, Math.PI / 2);
+  }
+
+  /* ================= 时钟 ================= */
+
+  private clockTuple(): [number, number] {
+    return [this.timeOfDay, this.day];
+  }
+
+  /** 用现实时间推进全天相位；跨过 1 时 day+1。 */
+  private advanceClock(dtMs: number): void {
+    if (!Number.isFinite(dtMs) || dtMs <= 0) return;
+    this.timeOfDay += dtMs / (DAY_LENGTH_SECONDS * 1000);
+    let guard = 0;
+    while (this.timeOfDay >= 1 && guard < 10000) {
+      this.timeOfDay -= 1;
+      this.day += 1;
+      guard += 1;
+    }
+    if (this.timeOfDay < 0 || this.timeOfDay >= 1) this.timeOfDay = 0; // 防御性归位
+  }
+
+  /** 时钟节流写档：静止时 timeOfDay 也在变化，因此同样要保存。 */
+  private updateClockAutoSave(dtMs: number): void {
+    if (!this.clockDirty) {
+      const cur = this.clockTuple();
+      const prev = this.lastSavedClockSnapshot;
+      if (prev === null || cur[0] !== prev[0] || cur[1] !== prev[1]) {
+        this.clockDirty = true;
+      }
+    }
+    if (!this.clockDirty) {
+      this.clockAutosaveAccumMs = 0;
+      return;
+    }
+    this.clockAutosaveAccumMs += dtMs;
+    if (this.clockAutosaveAccumMs >= AUTOSAVE_MOVE_INTERVAL_MS) {
+      this.autoSave();
+    }
   }
 
   /* ================= 存档 ================= */
@@ -353,6 +597,9 @@ export class Game {
         playerPos: this.playerPos,
         playerYaw: this.body.yaw,
         playerPitch: this.body.pitch,
+        facilities: this.world.facilityList(),
+        timeOfDay: this.timeOfDay,
+        day: this.day,
         savedAt: this.now(),
       };
       const text = serializeSave(payload);
@@ -364,6 +611,10 @@ export class Game {
       this.moveDirty = false;
       this.moveAutosaveAccumMs = 0;
       this.lastSavedMoveState = this.moveStateTuple();
+      // S3：成功写档同时清除时钟待写标记（静止时 timeOfDay 也会周期落盘）。
+      this.clockDirty = false;
+      this.clockAutosaveAccumMs = 0;
+      this.lastSavedClockSnapshot = this.clockTuple();
       this.saveError = null;
       // 体积预警（不阻塞）：序列化结果超阈值时在状态行提示
       if (text.length > SAVE_SIZE_WARN_BYTES) {
@@ -437,12 +688,15 @@ export class Game {
     this.world.ids.set(p.ids);
     this.world.placed.set(p.placed);
     this.world.revision += 1; // 载入会整体替换 ids/placed，版本号同步递增
+    this.world.setFacilities(p.facilities); // S3：恢复设施（cell→gridId 单一换算）
     this.rebuildDurability();
     this.world.recomputeAllSurfaces();
     this.seed = p.seed >>> 0;
     this.spawn = findStandingSpawn(this.world, Math.floor(p.playerPos[0]), Math.floor(p.playerPos[2]));
     this.inventory = p.inventory.slice();
     this.selected = p.selected;
+    this.timeOfDay = p.timeOfDay;
+    this.day = p.day;
     this.body = {
       pos: [p.playerPos[0], p.playerPos[1], p.playerPos[2]],
       vel: [0, 0, 0],
@@ -457,6 +711,11 @@ export class Game {
     this.moveDirty = false;
     this.moveAutosaveAccumMs = 0;
     this.lastSavedMoveState = this.moveStateTuple();
+    // 时钟快照同样对齐，避免载入后立刻触发无意义写档。
+    this.clockDirty = false;
+    this.clockAutosaveAccumMs = 0;
+    this.lastSavedClockSnapshot = this.clockTuple();
+    this.nextFacilityId = this.world.facilityStates().reduce((mx, f) => Math.max(mx, f.id), 0) + 1;
     this.loadNotice = null;
     return 'loaded';
   }
@@ -522,8 +781,18 @@ export class Game {
     this.overrides.clear();
     const next = generateWorld(this.seedCounter);
     this.applyWorld(next);
-    this.inventory = new Array(8).fill(0) as number[];
+    this.inventory = new Array(13).fill(0) as number[];
     this.selected = 1;
+    this.timeOfDay = 0;
+    this.day = 0;
+    this.viewMode = 'first';
+    this.orbit = {
+      distance: ORBIT_DEFAULT_DISTANCE,
+      yaw: ORBIT_DEFAULT_YAW,
+      pitch: ORBIT_DEFAULT_PITCH,
+      target: [this.spawn[0] + 0.5, this.spawn[1] + 2, this.spawn[2] + 0.5],
+    };
+    this.nextFacilityId = 1;
     this.cancelMining();
     this.autoSave();
   }
@@ -534,6 +803,7 @@ export class Game {
     this.spawn = next.spawn;
     this.soundSources = next.soundSources;
     this.body = makeBodyAtSpawn(next.spawn, this.world);
+    this.nextFacilityId = 1;
     this.cancelMining();
     this.jumpBufferMs = 0;
     this.uiNotice = null;
@@ -554,6 +824,15 @@ function makeBodyAtSpawn(spawn: XYZA, world: World): PlayerBody {
     }
   }
   return { pos, vel: [0, 0, 0], yaw: 0, pitch: 0, grounded: false };
+}
+
+/** yaw 归一化：保留浮点但在 [0, 2π) 内稳定，同一结果不因多次旋转漂移。 */
+function normalizeYaw(yaw: number): number {
+  if (!Number.isFinite(yaw)) return 0;
+  const twoPi = Math.PI * 2;
+  let v = yaw % twoPi;
+  if (v < 0) v += twoPi;
+  return v;
 }
 
 /** placeCell（单位方块）是否与玩家 AABB 相交（防止把方块放进身体里） */

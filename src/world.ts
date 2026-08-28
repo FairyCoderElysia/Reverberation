@@ -3,7 +3,7 @@
  * 64×64×24 固定网格；逻辑寻址 idx = x + 64*(z + 64*y)（恒定公式，确定性关键）。
  * 提供 blockAt / surfaceHeight / 点查 / DDA 射线遍历（全游戏唯一体素射线实现）。
  */
-import type { BlockRef, FacilityState, XYZA } from './types';
+import type { BlockRef, FacilitySnapshot, FacilityState, XYZA } from './types';
 
 export const WORLD_X = 64;
 export const WORLD_Y = 24;
@@ -185,6 +185,8 @@ export class World {
     this.ids[i] = material;
     this.durability[i] = material === 0 ? 0 : durability;
     this.placed[i] = material === 0 ? 0 : placed ? 1 : 0;
+    // 方块写入会覆盖该格设施（S3 单一来源：一格要么材料要么设施，不会有双实体）
+    this.facilityMap.delete(i);
     this.revision += 1; // 世界内容变化：渲染器按版本号感知单块变更
     // 更新该列地表高度缓存
     this.recomputeColumnSurface(x, z);
@@ -207,6 +209,94 @@ export class World {
       if (this.placed[i] === 1) n += 1;
     }
     return n;
+  }
+
+  /** 当前已放置设施快照（cell 派生自唯一索引公式，避免另存 pos 双源）。 */
+  facilityList(): FacilitySnapshot[] {
+    const out: FacilitySnapshot[] = [];
+    // Map 插入序即放置序，稳定且不参与物理数值；仅用于 UI/存档快照。
+    for (const f of this.facilityMap.values()) {
+      out.push({ cell: blockCoords(f.pos), kind: f.kind, yaw: f.yaw });
+    }
+    return out;
+  }
+
+  /** 设施内部状态列表（用于渲染/未来扩展；不直接暴露给 state.facilities 以避免 cell 双源）。 */
+  facilityStates(): FacilityState[] {
+    return Array.from(this.facilityMap.values());
+  }
+
+  /** 放置设施：独占一格，ids/durability 为 0、placed=1、facilityMap 非空。 */
+  putFacility(f: FacilityState): void {
+    const [x, y, z] = blockCoords(f.pos);
+    if (!inBounds(x, y, z)) return;
+    const i = this.idx(x, y, z);
+    this.ids[i] = 0;
+    this.durability[i] = 0;
+    this.placed[i] = 1;
+    this.facilityMap.set(i, f);
+    this.revision += 1;
+  }
+
+  /** 删除设施并清空该格（ids=0/durability=0/placed=0），返回被删设施或 null。 */
+  removeFacilityAt(cell: XYZA): FacilityState | null {
+    const [x, y, z] = cell;
+    if (!inBounds(x, y, z)) return null;
+    const i = this.idx(x, y, z);
+    const f = this.facilityMap.get(i) ?? null;
+    if (!f) return null;
+    this.facilityMap.delete(i);
+    this.ids[i] = 0;
+    this.durability[i] = 0;
+    this.placed[i] = 0;
+    this.revision += 1;
+    return f;
+  }
+
+  /** 更新设施朝向（yaw 弧度；S3 仅用于基础旋转，不触发行为）。 */
+  updateFacilityYaw(cell: XYZA, yaw: number): boolean {
+    const [x, y, z] = cell;
+    if (!inBounds(x, y, z)) return false;
+    const i = this.idx(x, y, z);
+    const f = this.facilityMap.get(i);
+    if (!f) return false;
+    f.yaw = yaw;
+    this.revision += 1;
+    return true;
+  }
+
+  /** 清空全部设施（重置/载入前调用，避免旧档残留）。 */
+  clearFacilities(): void {
+    this.facilityMap.clear();
+    // 不主动改 placed：调用方应随后重建 world.ids/placed 或全量 reset。
+  }
+
+  /** 从存档快照批量重建设施（内部 id 从 1 开始顺序重编，保证无冲突）。 */
+  setFacilities(snapshots: readonly FacilitySnapshot[]): void {
+    this.clearFacilities();
+    let nextId = 1;
+    for (const snap of snapshots) {
+      const [x, y, z] = snap.cell;
+      if (!inBounds(x, y, z)) continue;
+      const i = this.idx(x, y, z);
+      if (this.ids[i] !== 0 || this.facilityMap.has(i)) continue; // 跳过与方块冲突的坏档
+      this.ids[i] = 0;
+      this.durability[i] = 0;
+      this.placed[i] = 1;
+      this.facilityMap.set(i, {
+        id: nextId++,
+        kind: snap.kind,
+        pos: i,
+        yaw: snap.yaw,
+        energy: 0,
+        coreHp: 0,
+        band: 3,
+        linkFrom: [],
+        linkTo: [],
+        busState: 'idle',
+      });
+    }
+    this.revision += 1;
   }
 
   /** 整列重算地表高度（置块后调用） */

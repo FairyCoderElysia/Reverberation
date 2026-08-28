@@ -276,7 +276,7 @@ describe('Sprint 2 调试钩子输入校验', () => {
   it('giveItem 非法 id/n 抛中文可读错误', () => {
     const { app } = makeApp();
     expect(() => app.debug.giveItem(0, 3)).toThrow(/id 非法/);
-    expect(() => app.debug.giveItem(8, 3)).toThrow(/id 非法/);
+    expect(() => app.debug.giveItem(13, 3)).toThrow(/id 非法/);
     expect(() => app.debug.giveItem(1, Number.NaN)).toThrow(/有限数/);
   });
 
