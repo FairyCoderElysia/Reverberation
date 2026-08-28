@@ -192,10 +192,12 @@ export function buildApp(
         throw new Error('setMaterial 使材料方向性约束失效: ' + violations.join('; '));
       }
       game.overrides.set(id, next);
+      game.rebuildDurability(); // 有效材料表变化后回填已有世界方块（保持非空气格 durability = 当前表值）
       onMaterialChange();
     },
     resetMaterials: () => {
       game.overrides.clear();
+      game.rebuildDurability();
       onMaterialChange();
     },
     setGraphicTier: (t: GraphicTier) => {
@@ -215,7 +217,12 @@ export function buildApp(
       game.writeSave();
     },
     loadSave: () => {
-      return game.loadSave();
+      const result = game.loadSave();
+      // 与 regenerate/reset 一致：载入成功后必须重建渲染世界，避免 state 与 3D 画面脱节（QA N1）
+      if (result === 'loaded') {
+        onWorldChange(game);
+      }
+      return result;
     },
     clearSave: () => {
       game.clearSave();

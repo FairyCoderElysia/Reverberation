@@ -261,6 +261,7 @@ export class Game {
     this.world.removeBlock(cell);
     const refund = BREAK_REFUND;
     this.inventory[material] = Math.max(0, this.inventory[material]) + refund;
+    this.uiNotice = null; // 成功移除时清除旧的失败提示（QA Mn4）
     this.autoSave();
   }
 
@@ -353,6 +354,7 @@ export class Game {
 
   /** 从 storage 载入存档并整体替换运行时状态。 */
   loadSave(): 'loaded' | 'empty' | 'invalid' {
+    this.uiNotice = null; // 载入动作（无论结果）清除旧交互提示，避免遮蔽 loadNotice/saveError
     if (!this.storage) return 'invalid';
     let text: string | null = null;
     try {
@@ -395,8 +397,9 @@ export class Game {
   /**
    * 由 ids 重建 durability：非空气格 durability = 有效材料表（含 debug.setMaterial override）
    * 的对应耐久；空气格 = 0。S2 不序列化 durability，载入后必须由此恢复（contract SP2-07）。
+   * 同时用于 setMaterial/resetMaterials 改变有效表后回填已有世界方块，维持全局不变量。
    */
-  private rebuildDurability(): void {
+  rebuildDurability(): void {
     const specs = this.materialSpecs();
     const ids = this.world.ids;
     const dur = this.world.durability;
@@ -464,6 +467,8 @@ export class Game {
     this.soundSources = next.soundSources;
     this.body = makeBodyAtSpawn(next.spawn, this.world);
     this.cancelMining();
+    this.uiNotice = null;
+    this.loadNotice = null;
   }
 }
 

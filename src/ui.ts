@@ -9,6 +9,21 @@ import type { MaterialName } from './types';
 
 const BAND_ZH = ['低频', '中频', '高频'];
 
+/** 库存/选中回流决策的纯函数（Mn5：把 onFrame 接线做成可测路径）。 */
+export function inventorySignature(inventory: number[]): string {
+  return inventory.join(',');
+}
+
+/** 返回 true 表示当前帧需要重绘库存栏（库存或选中变化）。 */
+export function shouldRefreshInventory(
+  invSig: string,
+  lastInvSig: string,
+  selected: number,
+  lastSelected: number,
+): boolean {
+  return invSig !== lastInvSig || selected !== lastSelected;
+}
+
 /** 渲染 F2.3 面板到 #material-panel（数据与 state.materials 同源） */
 export function renderMaterialPanel(specs: MaterialSpec[]): void {
   const el = document.getElementById('material-panel');

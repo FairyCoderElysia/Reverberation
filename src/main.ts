@@ -7,7 +7,7 @@ import type { __App } from './apphook';
 import { generateWorld } from './worldgen';
 import { Game } from './game';
 import { Renderer } from './render/renderer';
-import { renderInventory, renderMaterialPanel, renderMiningProgress, renderStatus } from './ui';
+import { inventorySignature, renderInventory, renderMaterialPanel, renderMiningProgress, renderStatus, shouldRefreshInventory } from './ui';
 import { LOOK_SENSITIVITY } from './config';
 import type { GraphicTier } from './types';
 
@@ -69,19 +69,19 @@ function bootInner(): void {
     renderInventory(app.state.inventory, game.selected, selectHandler);
   }
   function selectHandler(id: number): void {
+    // 只改 selected；onFrame 下一帧统一检测并刷新库存栏（Mn2：点击与数字键一样避免重复回流）
     game.selected = id;
-    refreshInventory();
   }
   renderInventory(app.state.inventory, app.state.selected, selectHandler);
 
-  // 载入结果的中文提示（损坏/版本不兼容可见、不白屏）
-  renderStatus(game.uiNotice ?? game.saveError ?? game.loadNotice);
+  // 载入结果的中文提示（损坏/版本不兼容可见、不白屏）；优先级同样是存档异常优先
+  renderStatus(game.saveError ?? game.loadNotice ?? game.uiNotice);
 
   // 9. 第一人称输入绑定
-  bindInput(game, renderer, refreshInventory);
+  bindInput(game, renderer);
 
   // 10. 帧循环（物理固定步 + 视图 + UI 回流）
-  let lastInvSig = game.inventory.join(',');
+  let lastInvSig = inventorySignature(game.inventory);
   let lastSelected = game.selected;
   const onFrame = (): void => {
     const now = performance.now();
@@ -104,14 +104,16 @@ function bootInner(): void {
     app.state.perf.pixelRatio = renderer.getPixelRatio();
 
     renderMiningProgress(game.miningProgress);
-    // UI 与 state 恒一致（SP2-06）：库存/选中任一变化后同帧重绘库存栏
-    const invSig = game.inventory.join(',');
-    if (invSig !== lastInvSig || game.selected !== lastSelected) {
+    // UI 与 state 恒一致（SP2-06）：库存/选中任一变化后同帧重绘库存栏。
+    // 数字键只改 selected，由 onFrame 统一回流（Mn2：避免同一事件重复整栏重建）。
+    const invSig = inventorySignature(game.inventory);
+    if (shouldRefreshInventory(invSig, lastInvSig, game.selected, lastSelected)) {
       lastInvSig = invSig;
       lastSelected = game.selected;
       refreshInventory();
     }
-    renderStatus(game.uiNotice ?? game.saveError ?? game.loadNotice);
+    // 优先级：存档/载入异常 > 交互提示，避免 uiNotice 长期遮蔽 saveError/loadNotice（QA Mn4）
+    renderStatus(game.saveError ?? game.loadNotice ?? game.uiNotice);
   };
 
   if (renderer.available) {
@@ -129,7 +131,7 @@ function bootInner(): void {
 }
 
 /** 键盘 + 鼠标输入绑定。视角：右键拖动 / 指针锁移动；挖掘：按住左键；放置：右键点击。 */
-function bindInput(game: Game, renderer: Renderer, onSelectionChange: () => void): void {
+function bindInput(game: Game, renderer: Renderer): void {
   const keys = new Set<string>();
   const syncKeys = (): void => {
     game.input.forward = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
@@ -142,8 +144,8 @@ function bindInput(game: Game, renderer: Renderer, onSelectionChange: () => void
     if (e.code.startsWith('Digit')) {
       const n = Number(e.code.slice(5));
       if (n >= 1 && n <= 7) {
+        // 只改 selected；onFrame 下一帧统一检测并刷新库存栏（Mn2 去重复回流）
         game.selected = n;
-        onSelectionChange();
       }
     }
     keys.add(e.code);

@@ -9,7 +9,7 @@ import { generateWorld } from '../src/worldgen';
 import { Game, memoryStorage } from '../src/game';
 import { stepPlayer } from '../src/player';
 import type { PlayerBody } from '../src/player';
-import { renderInventory } from '../src/ui';
+import { renderInventory, shouldRefreshInventory } from '../src/ui';
 
 const SEED = 0x20260001;
 
@@ -259,6 +259,23 @@ describe('Sprint 2 调试钩子输入校验', () => {
 });
 
 describe('Sprint 2 放置/恢复耐久统一取有效材料表', () => {
+  it('setMaterial/resetMaterials 回填已有世界方块耐久，保持全局不变量', () => {
+    const { app, game } = makeApp();
+    setupWall(game); // 天然石材 [32,15,32]（material=4，默认耐久 120）
+    game.giveItem(1, 1);
+    game.selected = 1;
+    expect(game.tryPlaceSelected().ok).toBe(true); // 放置泡沫 [32,15,33]，默认耐久 30
+    expect(game.world.blockAt([32, 15, 33]).durability).toBe(30);
+    expect(game.world.blockAt([32, 15, 32]).durability).toBe(120);
+
+    app.debug.setMaterial(0, { durability: 999 }); // 有效泡沫耐久改为 999
+    expect(game.world.blockAt([32, 15, 33]).durability).toBe(999);
+
+    app.debug.resetMaterials();
+    expect(game.world.blockAt([32, 15, 33]).durability).toBe(30);
+    expect(game.world.blockAt([32, 15, 32]).durability).toBe(120);
+  });
+
   it('SP2-07 + Code-m7：loadSave 用有效材料表（含 setMaterial override）重建 durability', () => {
     const storage = memoryStorage();
     const g1 = new Game(generateWorld(SEED), { storage, now: () => 1111 });
@@ -292,6 +309,13 @@ describe('Sprint 2 放置/恢复耐久统一取有效材料表', () => {
 });
 
 describe('Sprint 2 库存 UI 回流（SP2-06）', () => {
+  it('shouldRefreshInventory 锁定 onFrame 接线决策：库存/选中变化才重绘', () => {
+    expect(shouldRefreshInventory('0,0', '0,0', 1, 1)).toBe(false);
+    expect(shouldRefreshInventory('0,3', '0,0', 1, 1)).toBe(true);
+    expect(shouldRefreshInventory('0,3,4', '0,3,4', 2, 1)).toBe(true);
+    expect(shouldRefreshInventory('0,3,4', '0,3,4', 2, 2)).toBe(false);
+  });
+
   it('renderInventory 渲染出的数量与 state 一致，库存变化后重绘', () => {
     let innerHTML = '';
     const slots: string[] = [];
