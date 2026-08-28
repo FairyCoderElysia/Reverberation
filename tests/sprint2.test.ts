@@ -10,7 +10,7 @@ import { Game, memoryStorage } from '../src/game';
 import { stepPlayer } from '../src/player';
 import type { PlayerBody } from '../src/player';
 import { renderInventory, shouldRefreshInventory } from '../src/ui';
-import { JUMP_BUFFER_MS } from '../src/config';
+import { AUTOSAVE_MOVE_INTERVAL_MS, JUMP_BUFFER_MS } from '../src/config';
 
 const SEED = 0x20260001;
 
@@ -34,6 +34,21 @@ function setupWall(game: Game): [number, number, number] {
   game.body.yaw = 0; // lookDir = (0,0,-1)
   game.body.pitch = 0;
   return [wx, 14, wz];
+}
+
+/**
+ * 在 y=12 造一片高出地形的平坦支撑面，并把玩家传送到脚底 y=13（支撑面顶面）：
+ * 用于确定性测试“微缝隙落地吸附 / 连续跳跃 / 移动自动存档”。
+ */
+function makeFlatPlatformGame(storage = memoryStorage(), now = () => 1000): Game {
+  const game = new Game(generateWorld(SEED), { storage, now });
+  for (let z = 8; z <= 48; z++) {
+    for (let x = 28; x <= 36; x++) {
+      game.world.setBlock([x, 12, z], 4, 120, false); // 石材平台，顶面 y=13
+    }
+  }
+  game.teleport([32.5, 13, 32.5]);
+  return game;
 }
 
 describe('Sprint 2 挖掘 / 放置 / 拆除', () => {
@@ -408,5 +423,111 @@ describe('用户实测热修：世界版本号与即时渲染可观测', () => {
     expect(rev2).toBeGreaterThan(rev1);
     game.applyBreak([32, 15, 33], 1, true);
     expect(app.state.worldRevision).toBeGreaterThan(rev2);
+  });
+});
+
+
+describe('用户实测第二批：落地吸附与连续跳跃（缺陷 A）', () => {
+  it('微缝隙 y=支撑面+0.002 且按住 Space：落地瞬间起跳', () => {
+    const game = makeFlatPlatformGame();
+    game.teleport([32.5, 13.002, 32.5]);
+    expect(game.body.pos[1]).toBeCloseTo(13.002);
+    game.input.jump = true;
+    // 首步：Y 碰撞吸附到 13.0，并立即产生向上跳速（6b）。
+    game.tickFrame(17);
+    expect(game.body.grounded).toBe(false);
+    expect(game.body.vel[1]).toBeGreaterThan(0);
+    expect(game.body.pos[1]).toBeGreaterThanOrEqual(13.0);
+    // 下一步：Y 轴实际位移上升，证明起跳成功。
+    game.tickFrame(17);
+    expect(game.body.pos[1]).toBeGreaterThan(13.0);
+    game.input.jump = false;
+  });
+
+  it('从空中落到支撑面后连续多次按 Space 均能起跳（含落地后的下一次）', () => {
+    const game = makeFlatPlatformGame();
+    const groundY = 13;
+    // 先落稳
+    for (let i = 0; i < 10 && !game.body.grounded; i++) game.tickFrame(17);
+    expect(game.body.grounded).toBe(true);
+    expect(game.body.pos[1]).toBeCloseTo(groundY, 6);
+
+    for (let round = 0; round < 4; round++) {
+      const before = game.body.pos[1];
+      game.pressJump();
+      game.tickFrame(17);
+      expect(game.body.vel[1]).toBeGreaterThan(0);
+      expect(game.body.pos[1]).toBeGreaterThan(before);
+      // 等待再次落地
+      for (let i = 0; i < 180 && game.body.pos[1] > groundY + 0.01; i++) game.tickFrame(17);
+      expect(game.body.pos[1]).toBeLessThanOrEqual(groundY + 0.01);
+      expect(game.body.grounded).toBe(true);
+    }
+  });
+
+  it('按住 Space 连跳不失效：多个跳跃段自动衔接', () => {
+    const game = makeFlatPlatformGame();
+    game.teleport([32.5, 13.002, 32.5]);
+    game.input.jump = true;
+    let jumpStarts = 0;
+    let prevVel = 0;
+    // 约 4 秒（60Hz 固定步）：应至少出现 2 次从下落/贴地转为上升的跳速。
+    for (let i = 0; i < 240; i++) {
+      game.tickFrame(17);
+      if (prevVel <= 0 && game.body.vel[1] > 0) jumpStarts += 1;
+      prevVel = game.body.vel[1];
+    }
+    game.input.jump = false;
+    expect(jumpStarts).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('用户实测第二批：移动自动存档与页面兜底（缺陷 B）', () => {
+  it('移动节流达到 AUTOSAVE_MOVE_INTERVAL_MS 后 lastSavedAt 更新，刷新后位置保留', () => {
+    const storage = memoryStorage();
+    const game = makeFlatPlatformGame(storage, () => 1000);
+    expect(game.lastSavedAt).toBe(0);
+    const startPos = game.playerPos.slice();
+    game.input.forward = 1; // yaw=0 → -Z，平台足够长
+    // 15 帧 × 100ms = 1500ms < 2000ms：尚未触发移动自动存档
+    for (let i = 0; i < 15; i++) game.tickFrame(100);
+    expect(game.lastSavedAt).toBe(0);
+    expect(game.playerPos).not.toEqual(startPos);
+    // 继续推进直到节流周期到达触发写档；在触发瞬间停止移动，使存储位置=离开前位置。
+    let savedPos: number[] | null = null;
+    for (let i = 0; i < 20 && savedPos === null; i++) {
+      game.tickFrame(100);
+      if (game.lastSavedAt > 0) {
+        game.input.forward = 0;
+        savedPos = game.playerPos.slice();
+      }
+    }
+    expect(savedPos).not.toBeNull();
+    expect(game.lastSavedAt).toBeGreaterThan(0);
+    expect(savedPos!).not.toEqual(startPos);
+
+    // 用另一 Game 载入同一存储：位置应恢复为离开前（仅移动，无挖掘/放置）
+    const g2 = new Game(generateWorld(999), { storage, now: () => 2222 });
+    expect(g2.loadSave()).toBe('loaded');
+    expect(g2.playerPos).toEqual(savedPos);
+  });
+
+  it('flushSaveForPageHide 立即写档：页面关闭兜底不丢移动', () => {
+    const storage = memoryStorage();
+    const game = makeFlatPlatformGame(storage, () => 1234);
+    // 直接产生一次移动
+    game.body.pos[2] -= 0.5;
+    game.flushSaveForPageHide();
+    expect(game.lastSavedAt).toBe(1234);
+    expect(storage.getItem('voice.save.v1')).not.toBeNull();
+
+    const g2 = new Game(generateWorld(999), { storage, now: () => 2222 });
+    expect(g2.loadSave()).toBe('loaded');
+    expect(g2.playerPos).not.toEqual([32.5, 13, 32.5]);
+  });
+
+  it('移动节流常量从 config 单源引用且为 1-3 秒区间', () => {
+    expect(AUTOSAVE_MOVE_INTERVAL_MS).toBeGreaterThanOrEqual(1000);
+    expect(AUTOSAVE_MOVE_INTERVAL_MS).toBeLessThanOrEqual(3000);
   });
 });

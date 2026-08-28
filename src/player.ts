@@ -57,9 +57,33 @@ export function aabbIntersects(world: World, pos: [number, number, number]): boo
   return false;
 }
 
+/** 落地判定容差（格）：吸附后允许的微小浮点误差范围。 */
+const GROUND_STAND_EPSILON = 0.001;
+
+/**
+ * 脚底正下方的支撑面顶面 Y（空气格底面）。使用 world.blockAt 的唯一索引来源，
+ * 不在此自写第二套体素索引；水平覆盖范围与 AABB 落地判定完全一致。
+ * 无支撑返回 null；扫描方向为「当前脚底所在层向下」的首个实体层顶面。
+ */
+export function groundSupportY(world: World, pos: [number, number, number]): number | null {
+  const x0 = Math.floor(pos[0] - PLAYER_HALF_WIDTH);
+  const x1 = Math.floor(pos[0] + PLAYER_HALF_WIDTH - 1e-7);
+  const z0 = Math.floor(pos[2] - PLAYER_HALF_WIDTH);
+  const z1 = Math.floor(pos[2] + PLAYER_HALF_WIDTH - 1e-7);
+  for (let y = Math.floor(pos[1]) - 1; y >= 0; y--) {
+    for (let z = z0; z <= z1; z++) {
+      for (let x = x0; x <= x1; x++) {
+        if (world.blockAt([x, y, z]).material !== 0) return y + 1;
+      }
+    }
+  }
+  return null;
+}
+
 /** 脚底正下方是否为实体（用于落地判定） */
 export function isOnGround(world: World, pos: [number, number, number]): boolean {
-  return aabbIntersects(world, [pos[0], pos[1] - 0.001, pos[2]]);
+  const top = groundSupportY(world, pos);
+  return top !== null && pos[1] >= top - GROUND_STAND_EPSILON && pos[1] <= top + GROUND_STAND_EPSILON;
 }
 
 function clampPitch(p: number): number {
@@ -136,21 +160,30 @@ export function stepPlayer(
   if (!aabbIntersects(world, [body.pos[0], ny, body.pos[2]])) {
     body.pos[1] = ny;
   } else {
-    if (body.vel[1] < 0) body.grounded = true;
+    if (body.vel[1] < 0) {
+      // 落地：把脚底精确吸附到支撑方块顶面（而非停在 0.001-0.006 格的微缝隙），
+      // 保证本步 grounded=true 在后续步首仍成立。
+      const supportTop = groundSupportY(world, body.pos);
+      if (supportTop !== null) body.pos[1] = supportTop;
+      body.grounded = true;
+    }
     body.vel[1] = 0;
   }
 
-  // 6b. 若本步因 Y 碰撞刚落地且缓冲仍有效，则消费边沿（覆盖“点按后即将落地”场景）。
+  // 6b. Y 碰撞刚落地时消费跳跃边沿/按住跳：
+  //  - 快速点按：缓冲仍有效时无论 held 是否已释放都起跳；
+  //  - 按住 Space：即使没有缓冲，落地瞬间也保持连跳不失效。
   if (input.jumpBufferMs !== undefined && input.jumpBufferMs > 0) {
     if (body.grounded) {
       input.jumpBufferMs = 0;
-      if (!input.jump) {
-        body.vel[1] = PLAYER_JUMP_SPEED;
-        body.grounded = false;
-      }
+      body.vel[1] = PLAYER_JUMP_SPEED;
+      body.grounded = false;
     } else {
       input.jumpBufferMs = Math.max(0, input.jumpBufferMs - dt * 1000);
     }
+  } else if (input.jump && body.grounded) {
+    body.vel[1] = PLAYER_JUMP_SPEED;
+    body.grounded = false;
   }
 
   return body;

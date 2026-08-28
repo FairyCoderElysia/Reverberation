@@ -48,6 +48,9 @@ export const PLAYER_PHYS_HZ = 60;
 /** 跳跃缓冲（ms）：Space keydown 边沿在限定时间内保留，快速点按不会因 keyup 落在同一帧而漏跳。 */
 export const JUMP_BUFFER_MS = 150;
 
+/** 移动自动存档节流（ms）：玩家位置/朝向发生变化后，至少间隔该时长才写一次档（避免每帧写档）。 */
+export const AUTOSAVE_MOVE_INTERVAL_MS = 2000;
+
 /** 存档序列化体积预警阈值（字节）：超过在状态行提示，不阻塞写档 */
 export const SAVE_SIZE_WARN_BYTES = 40 * 1024;
 

@@ -13,6 +13,7 @@ import type { SavePayload, StorageLike } from './save';
 import { findStandingSpawn, generateWorld } from './worldgen';
 import type { GeneratedWorld } from './worldgen';
 import {
+  AUTOSAVE_MOVE_INTERVAL_MS,
   INTERACTION_REACH,
   JUMP_BUFFER_MS,
   MINING_SECONDS,
@@ -89,6 +90,12 @@ export class Game {
   input: PlayerInput = { forward: 0, right: 0, jump: false };
   /** 跳跃缓冲剩余毫秒（用户实测热修）：由 main 在 Space 非 repeat keydown 写入，固定步物理消费。 */
   jumpBufferMs = 0;
+  /** 玩家位置/朝向相对最近一次成功写档是否有变化（B 移动自动存档）。 */
+  private moveDirty = false;
+  /** 自上次成功写档后累计的移动节流毫秒数（B 移动自动存档）。 */
+  private moveAutosaveAccumMs = 0;
+  /** 最近一次成功写档时的玩家位置/朝向快照（B 移动自动存档）。 */
+  private lastSavedMoveState: [number, number, number, number, number] | null = null;
   mineHeld = false;
   placePressed = false;
 
@@ -101,6 +108,8 @@ export class Game {
     this.now = opts?.now ?? (() => Date.now());
 
     this.body = makeBodyAtSpawn(generated.spawn, this.world);
+    // 初始移动快照对齐出生点：未发生移动前不触发移动节流写档。
+    this.lastSavedMoveState = this.moveStateTuple();
     this.inventory = new Array(8).fill(0) as number[];
     this.selected = 1;
     this.miningProgress = 0;
@@ -156,6 +165,7 @@ export class Game {
       stepPlayer(this.body, physInput, 1 / PLAYER_PHYS_HZ, this.world);
       this.jumpBufferMs = physInput.jumpBufferMs ?? 0;
     }
+    this.updateMoveAutoSave(dt);
     this.updateMining(dt / 1000);
     if (this.placePressed) {
       this.placePressed = false;
@@ -346,6 +356,10 @@ export class Game {
       const text = serializeSave(payload);
       writeSaveRaw(this.storage, text);
       this.lastSavedAt = this.now();
+      // 任何成功写档都已持久化当前玩家位置/朝向，因此清除移动待写标记。
+      this.moveDirty = false;
+      this.moveAutosaveAccumMs = 0;
+      this.lastSavedMoveState = this.moveStateTuple();
       this.saveError = null;
       // 体积预警（不阻塞）：序列化结果超阈值时在状态行提示
       if (text.length > SAVE_SIZE_WARN_BYTES) {
@@ -362,6 +376,35 @@ export class Game {
 
   /** 关键事件后的同帧自动写档（contract SP2-08）。 */
   autoSave(): void {
+    this.writeSave();
+  }
+
+  /** 当前玩家位置/朝向快照（B 移动自动存档）。 */
+  private moveStateTuple(): [number, number, number, number, number] {
+    return [this.body.pos[0], this.body.pos[1], this.body.pos[2], this.body.yaw, this.body.pitch];
+  }
+
+  /** 检测移动并执行节流自动写档（B：移动/跳跃后不再丢失刷新进度）。 */
+  private updateMoveAutoSave(dtMs: number): void {
+    if (!this.moveDirty) {
+      const cur = this.moveStateTuple();
+      const prev = this.lastSavedMoveState;
+      if (prev === null || cur[0] !== prev[0] || cur[1] !== prev[1] || cur[2] !== prev[2] || cur[3] !== prev[3] || cur[4] !== prev[4]) {
+        this.moveDirty = true;
+      }
+    }
+    if (!this.moveDirty) {
+      this.moveAutosaveAccumMs = 0;
+      return;
+    }
+    this.moveAutosaveAccumMs += dtMs;
+    if (this.moveAutosaveAccumMs >= AUTOSAVE_MOVE_INTERVAL_MS) {
+      this.autoSave();
+    }
+  }
+
+  /** 页面关闭/隐藏兜底：由 main 的 pagehide/beforeunload/visibilitychange 调用，立即写档。 */
+  flushSaveForPageHide(): void {
     this.writeSave();
   }
 
@@ -405,6 +448,10 @@ export class Game {
     this.snapPlayerToAir();
     this.cancelMining();
     this.jumpBufferMs = 0;
+    // 载入后把移动快照对齐到已恢复位置，避免无移动也触发节流写档。
+    this.moveDirty = false;
+    this.moveAutosaveAccumMs = 0;
+    this.lastSavedMoveState = this.moveStateTuple();
     this.loadNotice = null;
     return 'loaded';
   }

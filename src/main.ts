@@ -136,6 +136,15 @@ function bootInner(): void {
   }
 
   window.addEventListener('resize', () => renderer.handleResize());
+
+  // 页面关闭/隐藏兜底（用户实测第二批 B）：移动节流可能在关闭前尚未到周期，
+  // 刷新/关闭/切后台时强制写一次档，保证“仅移动后刷新位置保留”。
+  window.addEventListener('pagehide', () => game.flushSaveForPageHide());
+  window.addEventListener('beforeunload', () => game.flushSaveForPageHide());
+  window.addEventListener('visibilitychange', () => {
+    // 只在隐藏时写一次，避免每个 visibilitychange 都触发；pagehide/beforeunload 仍作主要兜底。
+    if (document.visibilityState === 'hidden') game.flushSaveForPageHide();
+  });
 }
 
 /** 键盘 + 鼠标输入绑定。视角：右键拖动 / 指针锁移动；挖掘：按住左键；放置：右键点击。 */
