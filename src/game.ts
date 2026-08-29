@@ -108,8 +108,16 @@ export class Game {
   graphicTier: GraphicTier = 'high';
   /** S5 声场视图开关（UI/热键/debug.setSoundView 共用同一状态）。 */
   soundViewVisible = true;
-  /** S6：全局能量池（唯一全局储能字段；所有核心设施采收/汇入同一池）。 */
-  coreEnergy = 0;
+  /** S6：全局能量池持久化基值（唯一全局储能字段；所有核心设施采收/汇入同一池）。 */
+  private coreEnergyBase = 0;
+  /** S6：调试会话级覆盖（debug.setCoreEnergy 只写此处；null 表示当前无会话覆盖）。 */
+  private coreEnergyOverride: number | null = null;
+
+  /** S6：对外/UI 统一读当前储能：override ?? base。 */
+  get coreEnergy(): number {
+    return this.coreEnergyOverride ?? this.coreEnergyBase;
+  }
+
   /** S6：采收计时器（ms）；每个 core 设施按 HARVEST_TICK_MS 结算。 */
   private harvestTickAccumMs = 0;
   /** S5 最近一次声学全量重算耗时（ms，有限数）。 */
@@ -387,15 +395,21 @@ export class Game {
       const e = this.energyField.sample(cell);
       delta += HARVEST_EFFICIENCY * (e[0] + e[1] + e[2]);
     }
-    if (delta > 0) this.coreEnergy += delta;
+    if (delta > 0) {
+      if (this.coreEnergyOverride !== null) {
+        this.coreEnergyOverride += delta;
+      } else {
+        this.coreEnergyBase += delta;
+      }
+    }
   }
 
-  /** S6 会话级设置全局储能；有限非负，不写存档，reset 恢复默认。 */
+  /** S6 会话级覆盖全局储能显示；有限非负，只写 override，不写存档，reset 恢复默认。 */
   setCoreEnergy(value: number): void {
     if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
       throw new Error('setCoreEnergy: 必须为有限非负数');
     }
-    this.coreEnergy = value;
+    this.coreEnergyOverride = value;
   }
 
   /** S6 探针调试读取：不要求先放置探针；合法格无能量返回 [0,0,0]。 */
@@ -420,6 +434,11 @@ export class Game {
   /** S6：3 个固定环境声源格不可被普通方块/设施占用。 */
   isSoundSourceCell(cell: XYZA): boolean {
     return this.soundSources.some((s) => s.pos[0] === cell[0] && s.pos[1] === cell[1] && s.pos[2] === cell[2]);
+  }
+
+  /** 声源格禁占统一中文提示：普通方块与设施两个放置入口共用，避免重复字符串/漏改。 */
+  private soundSourcePlacementError(cell: XYZA): string | null {
+    return this.isSoundSourceCell(cell) ? '固定声源格不可放置方块/设施' : null;
   }
 
   teleport(pos: XYZA): void {
@@ -599,8 +618,9 @@ export class Game {
       this.uiNotice = '不能放置到玩家身体内';
       return { ok: false, reason: '不能放置到玩家身体内' };
     }
-    if (this.isSoundSourceCell(placeCell)) {
-      this.uiNotice = '固定声源格不可放置方块/设施';
+    const sourcePlacementError = this.soundSourcePlacementError(placeCell);
+    if (sourcePlacementError) {
+      this.uiNotice = sourcePlacementError;
       return { ok: false, reason: '固定声源格不可放置' };
     }
     if (id >= 8 && id <= 12) {
@@ -686,8 +706,9 @@ export class Game {
 
   private placeFacilityAtCell(kind: FacilityKind, cell: XYZA, yaw: number): { ok: boolean; reason: string } {
     assertFiniteYaw(yaw);
-    if (this.isSoundSourceCell(cell)) {
-      this.uiNotice = '固定声源格不可放置方块/设施';
+    const sourcePlacementError = this.soundSourcePlacementError(cell);
+    if (sourcePlacementError) {
+      this.uiNotice = sourcePlacementError;
       return { ok: false, reason: '固定声源格不可放置' };
     }
     const itemId = facilityItemIdForKind(kind);
@@ -770,7 +791,7 @@ export class Game {
       const payload: SavePayload = {
         version: SAVE_VERSION,
         seed: this.seed,
-        coreEnergy: this.coreEnergy,
+        coreEnergy: this.coreEnergyBase,
         ids: this.world.ids,
         placed: this.world.placed,
         inventory: this.inventory.slice(),
@@ -877,7 +898,9 @@ export class Game {
     this.spawn = findStandingSpawn(this.world, Math.floor(p.playerPos[0]), Math.floor(p.playerPos[2]));
     this.inventory = p.inventory.slice();
     this.selected = p.selected;
-    this.coreEnergy = p.coreEnergy;
+    this.coreEnergyBase = p.coreEnergy;
+    this.coreEnergyOverride = null;
+    this.harvestTickAccumMs = 0;
     this.timeOfDay = p.timeOfDay;
     this.day = p.day;
     this.body = {
@@ -992,7 +1015,8 @@ export class Game {
       target: [this.spawn[0] + 0.5, this.spawn[1] + 2, this.spawn[2] + 0.5],
     };
     this.nextFacilityId = 1;
-    this.coreEnergy = 0;
+    this.coreEnergyBase = 0;
+    this.coreEnergyOverride = null;
     this.harvestTickAccumMs = 0;
     this.cancelMining();
     this.autoSave();

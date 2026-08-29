@@ -69,6 +69,18 @@ describe('索引公式单一来源（Code-M2）', () => {
     expect(src).not.toMatch(/const Y = 24;/);
     expect(src).not.toMatch(/const Z = 64;/);
   });
+
+  it('save.ts 必须导入 blockIndex 且不得重复手写体素索引公式（S6 Major M1）', () => {
+    const files = import.meta.glob('../src/save.ts', {
+      query: '?raw',
+      import: 'default',
+      eager: true,
+    }) as Record<string, string>;
+    const src = files[Object.keys(files)[0]] ?? '';
+    expect(src).toBeTruthy();
+    expect(src).toContain('blockIndex');
+    expect(src).not.toMatch(/WORLD_X \* \(/);
+  });
 });
 
 describe('世界版本号（用户实测热修：即时渲染跟踪）', () => {
@@ -80,7 +92,6 @@ describe('世界版本号（用户实测热修：即时渲染跟踪）', () => {
       kind: 'core' as const,
       pos: w.idx(0, 0, 0),
       yaw: 0,
-      energy: 0,
       coreHp: 0,
       band: 3 as const,
       linkFrom: [],

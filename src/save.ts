@@ -8,7 +8,7 @@
  * 损坏 / 版本 0、4+ 仍按 invalid 处理并中文提示，不白屏。
  */
 import { SAVE_KEY, SAVE_VERSION } from './config';
-import { WORLD_X, WORLD_Y, WORLD_Z } from './world';
+import { blockIndex, WORLD_X, WORLD_Y, WORLD_Z } from './world';
 import { SOUND_SOURCE_DEFS } from './worldgen';
 import type { FacilitySnapshot, FacilityKind } from './types';
 
@@ -206,7 +206,7 @@ export function parseSave(text: string): ParseResult {
   // v1/v2 旧档迁移：coreEnergy 归 0，并清洗与 3 个固定声源格重叠的方块/设施。
   if (o.version < 3) {
     for (const cell of SOUND_SOURCE_DEFS) {
-      const i = cell.pos[0] + WORLD_X * (cell.pos[2] + WORLD_Z * cell.pos[1]);
+      const i = blockIndex(cell.pos[0], cell.pos[1], cell.pos[2]);
       ids[i] = 0;
       placed[i] = 0;
     }

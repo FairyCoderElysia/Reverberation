@@ -25,6 +25,12 @@ export interface Recipe {
   output: RecipeOutput;
 }
 
+/** 设施能力精确 schema：core=store、probe=read；其余无任何能力键（编译期禁止 logic 等误加）。 */
+export type FacilityAbilities =
+  | { store: true }
+  | { read: true }
+  | Record<string, never>;
+
 export interface FacilityDef {
   id: number;
   kind: FacilityKind;
@@ -32,7 +38,7 @@ export interface FacilityDef {
   itemId: number;
   implemented: boolean;
   /** 能力表只反映本 sprint 已实现的真实行为；无 logic/and/or/not/memory/clock 等未实现语义。 */
-  abilities: Record<string, boolean>;
+  abilities: FacilityAbilities;
 }
 
 /** 物品 id → 中文名（1..12；1 泡沫/2 木材/3 玻璃/4 石材/5 混凝土/6 金属/7 土层） */

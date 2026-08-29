@@ -74,7 +74,7 @@ export interface FacilityState {
   kind: FacilityKind;
   pos: number;
   yaw: number;
-  energy: number;
+  /** S6：不再保留实例级 energy；全局储能唯一字段为 Game.coreEnergy（override ?? base）。 */
   coreHp: number;
   band: Band | 3;
   linkFrom: number[];

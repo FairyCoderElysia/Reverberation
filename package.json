@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "浏览器端 3D 体素声学沙盒生存游戏（Sprint 5：声场视图可视化与性能档降级）",
+  "description": "浏览器端 3D 体素声学沙盒生存游戏（Sprint 6：能量核心采收与声学探针）",
   "scripts": {
     "dev": "vite",
     "build": "tsc -p tsconfig.json --noEmit && vite build",

@@ -62,7 +62,6 @@ export function createFacilityState(
     kind,
     pos,
     yaw: normalizeYaw(yaw),
-    energy: 0,
     coreHp: 0,
     band: 3,
     linkFrom: [],

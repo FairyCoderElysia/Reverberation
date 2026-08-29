@@ -302,7 +302,6 @@ export class World {
         kind: snap.kind,
         pos: i,
         yaw: snap.yaw,
-        energy: 0,
         coreHp: 0,
         band: 3,
         linkFrom: [],

@@ -157,7 +157,7 @@ describe('SP6-05 探针同源只读与拆除返还', () => {
 });
 
 describe('SP6-06/07 存档 v3 与 v2 迁移', () => {
-  it('v3 回环：coreEnergy/设施恢复；探针读数不持久化；下次写档仍 v3', () => {
+  it('v3 回环：coreEnergy/设施恢复；探针读数不持久化；debug override 不写档；下次写档仍 v3', () => {
     const storage = memoryStorage();
     const g1 = new Game(generateWorld(SEED), { storage, now: () => 1000 });
     g1.giveItem(8, 1);
@@ -166,8 +166,32 @@ describe('SP6-06/07 存档 v3 与 v2 迁移', () => {
     const probeCell: XYZA = [35, 18, 35];
     expect(g1.placeFacility('core', coreCell, 0).ok).toBe(true);
     expect(g1.placeFacility('probe', probeCell, 1.1).ok).toBe(true);
+
+    // 调试覆盖只影响会话读数；writeSave 必须仍写持久基值（base=0）。
     g1.setCoreEnergy(23.5);
     g1.writeSave();
+    const rawAfterOverride = JSON.parse(storage.getItem('voice.save.v1')!) as Record<string, unknown>;
+    expect(rawAfterOverride.version).toBe(3);
+    expect(rawAfterOverride.coreEnergy).toBe(0);
+
+    // 构造一个真实的 v3 持久化基值 23.5，验证载入路径恢复 coreEnergy。
+    const payloadV3 = {
+      version: 3,
+      seed: g1.seed,
+      coreEnergy: 23.5,
+      ids: g1.world.ids,
+      placed: g1.world.placed,
+      inventory: g1.inventory.slice(),
+      selected: g1.selected,
+      playerPos: g1.playerPos,
+      playerYaw: g1.body.yaw,
+      playerPitch: g1.body.pitch,
+      facilities: g1.world.facilityList(),
+      timeOfDay: 0,
+      day: 0,
+      savedAt: 1111,
+    };
+    storage.setItem('voice.save.v1', serializeSave(payloadV3));
 
     const rawText = storage.getItem('voice.save.v1')!;
     const raw = JSON.parse(rawText) as Record<string, unknown>;
@@ -229,8 +253,16 @@ describe('SP6-06/07 存档 v3 与 v2 迁移', () => {
     expect(g2.facilitySnapshots()).toEqual([{ cell: legalCell, kind: 'core', yaw: 0.7 }]);
     expect(g2.world.blockAt(overlapBlock).material).toBe(0);
     expect(g2.world.blockAt(overlapBlock).placed).toBe(false);
+    expect(g2.world.blockAt(overlapBlock).durability).toBe(0);
     expect(g2.world.blockAt(overlapFacilityCell).facility).toBeNull();
+    expect(g2.world.blockAt(overlapFacilityCell).placed).toBe(false);
     expect(g2.world.countPlacedBlocks()).toBe(1);
+    // 派生状态同步：载入后 revision 已递增；非声源格天然方块耐久按材料表重建。
+    expect(g2.world.revision).toBeGreaterThan(0);
+    const naturalRow = g2.world.ids[g2.world.idx(legalCell[0], 8, legalCell[2])];
+    if (naturalRow > 0) {
+      expect(g2.world.durability[g2.world.idx(legalCell[0], 8, legalCell[2])]).toBeGreaterThan(0);
+    }
 
     g2.writeSave();
     const raw2 = JSON.parse(storage.getItem('voice.save.v1')!) as Record<string, unknown>;
@@ -247,14 +279,27 @@ describe('SP6-08/09 能力 schema 与调试钩子边界', () => {
     }
   });
 
-  it('setCoreEnergy 有限非负、会话级不写档；reset 恢复默认', () => {
-    const { app } = makeEmptyApp();
+  it('setCoreEnergy 有限非负、会话级不写档；自动保存后刷新仍为 base；reset 恢复默认', () => {
+    const storage = memoryStorage();
+    const game = new Game({ world: new World(), seed: 1, spawn: [32, 14, 32] as XYZA, soundSources: [] }, { storage, now: () => 1000 });
+    const app = buildApp(game, () => {}, () => {}, () => {}, () => 2);
     const saved = app.state.lastSavedAt;
     app.debug.setCoreEnergy(8);
     expect(app.state.coreEnergy).toBe(8);
     expect(app.state.lastSavedAt).toBe(saved);
     expect(() => app.debug.setCoreEnergy(-1)).toThrow(/非负/);
     expect(() => app.debug.setCoreEnergy(Number.NaN)).toThrow(/有限非负数/);
+
+    // 任意自动保存不得把调试覆盖写入本地存储。
+    game.autoSave();
+    const raw = JSON.parse(storage.getItem('voice.save.v1')!) as Record<string, unknown>;
+    expect(raw.coreEnergy).toBe(0);
+
+    // 载入同一存档后，会话覆盖被清空，coreEnergy 恢复为保存前的 base（此处 0）。
+    const g2 = new Game(generateWorld(999), { storage, now: () => 2000 });
+    expect(g2.loadSave()).toBe('loaded');
+    expect(g2.coreEnergy).toBe(0);
+    expect(app.state.coreEnergy).toBe(8); // 原会话仍保留 override
     app.reset();
     expect(app.state.coreEnergy).toBe(0);
   });
