@@ -298,3 +298,43 @@ html, body {
 .inv-slots .slot {
   font-size: 11px;
 }
+
+/* ===== Sprint 5：声场视图开关/图例 ===== */
+.sound-view-toggle {
+  left: calc(50% + 150px);
+  transform: translateX(-50%);
+  border-color: rgba(93, 217, 255, 0.5);
+  color: #9fd8ef;
+}
+.sound-view-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.sound-legend {
+  position: fixed;
+  bottom: 18px;
+  right: 12px;
+  z-index: 8;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  background: var(--panel-bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--fg);
+  pointer-events: none;
+}
+.sound-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.sound-legend-swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+}

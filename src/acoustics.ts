@@ -234,6 +234,36 @@ export class AcousticEngine {
     this.params.fieldThreshold = DEFAULT_ACOUSTIC_TUNING.fieldThreshold;
   }
 
+  /** S5 性能档：读取当前声学传播参数（state.sim 只读投影，不暴露内部可变引用）。 */
+  getParams(): Readonly<AcousticParams> {
+    return { ...this.params };
+  }
+
+  /** S5 性能档：覆写传播参数（射线/反弹/绕射/阈值）。只影响精度，不改方向性。 */
+  setParams(patch: Partial<AcousticParams>): void {
+    if (patch.rays !== undefined) {
+      if (!Number.isInteger(patch.rays) || patch.rays < 1 || patch.rays > 512) {
+        throw new Error('acoustics.setParams: rays 需为 1..512 的整数');
+      }
+      this.params.rays = patch.rays;
+    }
+    if (patch.bounces !== undefined) {
+      if (!Number.isInteger(patch.bounces) || patch.bounces < 0 || patch.bounces > 8) {
+        throw new Error('acoustics.setParams: bounces 需为 0..8 的整数');
+      }
+      this.params.bounces = patch.bounces;
+    }
+    if (patch.diffract !== undefined) {
+      this.params.diffract = patch.diffract;
+    }
+    if (patch.fieldThreshold !== undefined) {
+      if (!Number.isFinite(patch.fieldThreshold) || patch.fieldThreshold < 0) {
+        throw new Error('acoustics.setParams: fieldThreshold 需为 >=0 的有限数');
+      }
+      this.params.fieldThreshold = patch.fieldThreshold;
+    }
+  }
+
   /** 仅由 Game 在默认事件后调用；返回新的 field，不在这里管理源列表 */
   recalc(sources: readonly AcousticEvent[]): EnergyField {
     // 每个声源先独立计算成稀疏场，再按固定 source 顺序相加。
@@ -369,10 +399,12 @@ export class AcousticEngine {
         afterAbsorb[1] * ac.rho[1],
         afterAbsorb[2] * ac.rho[2],
       ];
+      // 绕射能量先从入射能量中扣除材料吸收（afterAbsorb），使高吸收材料边缘泄漏
+      // 也随频段降低，避免低频/高频方向性被频率无关的绕射分量逆转。
       const diff: BandEnergy = [
-        arrived[0] * this.tuning.G_DIFFRACT * 0.01,
-        arrived[1] * this.tuning.G_DIFFRACT * 0.01,
-        arrived[2] * this.tuning.G_DIFFRACT * 0.01,
+        afterAbsorb[0] * this.tuning.G_DIFFRACT * 0.01,
+        afterAbsorb[1] * this.tuning.G_DIFFRACT * 0.01,
+        afterAbsorb[2] * this.tuning.G_DIFFRACT * 0.01,
       ];
 
       hitPoint = [
@@ -445,6 +477,13 @@ export class AcousticEngine {
       hitPoint[1] + dir[1] * (1 + 1e-4),
       hitPoint[2] + dir[2] * (1 + 1e-4),
     ] as [number, number, number];
+    // 透射能量先写入遮挡物后方第一格（traceRay 会跳过该起始格以避免把声源格重复计入）。
+    const sx = Math.floor(start[0]);
+    const sy = Math.floor(start[1]);
+    const sz = Math.floor(start[2]);
+    if (inBounds(sx, sy, sz)) {
+      addToBin(map, blockIndex(sx, sy, sz), power);
+    }
     this.traceRay(
       map,
       start[0],

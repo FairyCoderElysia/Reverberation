@@ -116,9 +116,32 @@ export interface PerfState {
   avgFrameMs: number;
   drawCalls: number;
   instances: number;
+  /** S5：声场可视化点数（与 perf.instances 世界方块实例数分离） */
+  visualInstances: number;
   pixelRatio: number;
   lastBench: BenchResult | null;
 }
 
 /** 图形档 */
 export type GraphicTier = 'high' | 'low';
+/** 声学重算原因枚举（S5 性能指标；唯一允许值） */
+export type LastRecalcReason = 'initial' | 'world' | 'source' | 'tuning' | 'manual';
+
+/** 声场视图状态（S5：可视化只读会话状态；version 与 energyField.version 同源同步） */
+export interface SoundViewState {
+  visible: boolean;
+  legend: boolean;
+  version: number;
+  tier: GraphicTier;
+}
+
+/** 声学/模拟性能指标（S5：state.sim） */
+export interface SimState {
+  version: number;
+  lastRecalcDurationMs: number;
+  lastRecalcReason: LastRecalcReason;
+  rayCount: number;
+  bounceCount: number;
+  physicsHz: number | null;
+}
+

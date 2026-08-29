@@ -9,7 +9,7 @@ import { BAND_COLORS, FACILITY_COLORS, MATERIAL_COLORS } from './theme';
 import type { MaterialSpec } from './types';
 import type { MaterialName } from './types';
 
-const BAND_ZH = ['低频', '中频', '高频'];
+export const BAND_ZH = ['低频', '中频', '高频'];
 
 /** 库存/选中回流决策的纯函数（Mn5：把 onFrame 接线做成可测路径）。 */
 export function inventorySignature(inventory: number[]): string {
@@ -24,6 +24,29 @@ export function shouldRefreshInventory(
   lastSelected: number,
 ): boolean {
   return invSig !== lastInvSig || selected !== lastSelected;
+}
+
+/** S5：声场图例纯 HTML 构建（文本/色块均来自 BAND_ZH 与 BAND_COLORS 单源）。 */
+export function soundLegendHtml(): string {
+  return BAND_ZH.map(
+    (name, i) =>
+      `<span class="sound-legend-item"><i class="sound-legend-swatch" style="background:${BAND_COLORS[i] ?? '#fff'}"></i>${name}</span>`,
+  ).join('');
+}
+
+/** S5：图例 DOM 与 state.soundView.legend 同步（legend=false 隐藏，true 显示）。 */
+export function renderSoundLegend(legendVisible: boolean): void {
+  const el = document.getElementById('sound-legend');
+  if (!el) return;
+  el.innerHTML = soundLegendHtml();
+  el.style.display = legendVisible ? '' : 'none';
+}
+
+/** S5：声场视图 UI 按钮文本（与 state.soundView.visible 同源）。 */
+export function renderSoundViewButton(visible: boolean): void {
+  const el = document.getElementById('sound-view-toggle');
+  if (!el) return;
+  el.textContent = visible ? '声场视图：开（V）' : '声场视图：关（V）';
 }
 
 /** 渲染 F2.3 面板到 #material-panel（数据与 state.materials 同源） */

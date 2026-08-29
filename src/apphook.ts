@@ -9,7 +9,7 @@ import { mergeTriplet } from './materials';
 import type { MaterialOverrides } from './materials';
 import type { Game } from './game';
 import { DAY_LENGTH_SECONDS, INTERACTION_REACH } from './config';
-import type { BandEnergy, FacilityKind, FacilitySnapshot, GraphicTier, OrbitState, PerfState, SoundSource, XYZA } from './types';
+import type { BandEnergy, FacilityKind, FacilitySnapshot, GraphicTier, OrbitState, PerfState, SimState, SoundSource, SoundViewState, XYZA } from './types';
 import type { BlockRef } from './types';
 import { FACILITY_DEFS, RECIPES } from './recipes';
 
@@ -71,6 +71,12 @@ export interface AppState {
     sample: (g: XYZA) => BandEnergy;
     version: number;
   };
+  /** S5：全局图形档（与 debug.setGraphicTier 同源） */
+  graphicTier: GraphicTier;
+  /** S5：声场视图状态（version 与 energyField.version 同步；tier 派生自 graphicTier） */
+  soundView: SoundViewState;
+  /** S5：声学/模拟性能指标 */
+  sim: SimState;
 }
 
 export interface DebugHooks {
@@ -79,6 +85,8 @@ export interface DebugHooks {
   setMaterial: (id: number, patch: MaterialOverrides) => void;
   resetMaterials: () => void;
   setGraphicTier: (t: GraphicTier) => void;
+  /** S5 增量：声场视图开关（与 UI/热键共用同一 state.soundView.visible） */
+  setSoundView: (visible: boolean) => void;
   benchRay: (opts?: { rays?: number; bounces?: number }) => {
     avgMs: number;
     p95Ms: number;
@@ -145,6 +153,7 @@ export function buildApp(
     avgFrameMs: 0,
     drawCalls: 0,
     instances: 0,
+    visualInstances: 0,
     pixelRatio: readPixelRatio(),
     lastBench: null,
   };
@@ -263,6 +272,32 @@ export function buildApp(
         },
       };
     },
+    get graphicTier() {
+      return game.graphicTier;
+    },
+    get soundView() {
+      return {
+        visible: game.soundViewVisible,
+        legend: game.soundViewVisible,
+        get version() {
+          return game.energyField.version;
+        },
+        get tier() {
+          return game.graphicTier;
+        },
+      };
+    },
+    get sim() {
+      const params = game.acoustics.getParams();
+      return {
+        version: game.energyField.version,
+        lastRecalcDurationMs: game.lastRecalcDurationMs,
+        lastRecalcReason: game.lastRecalcReason,
+        rayCount: params.rays,
+        bounceCount: params.bounces,
+        physicsHz: game.simPhysicsHz,
+      };
+    },
   };
 
   const debug: DebugHooks = {
@@ -299,8 +334,15 @@ export function buildApp(
       onMaterialChange();
     },
     setGraphicTier: (t: GraphicTier) => {
+      game.setGraphicTier(t);
       onTierChange(t);
       perf.pixelRatio = readPixelRatio();
+    },
+    setSoundView: (visible: boolean) => {
+      if (typeof visible !== 'boolean') {
+        throw new Error('setSoundView: visible 需为布尔值');
+      }
+      game.setSoundView(visible);
     },
     benchRay: (opts) => {
       const res = runBenchRay(game.world, opts ?? {});
@@ -353,7 +395,7 @@ export function buildApp(
       game.clearSources();
     },
     recalcAcoustics: () => {
-      game.recalcAcoustics();
+      game.recalcAcoustics('manual');
     },
     setTuning: (patch) => {
       game.setTuning(patch);

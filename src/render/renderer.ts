@@ -3,6 +3,9 @@ import type { FacilitySnapshot, GraphicTier, OrbitState, SoundSource, XYZA } fro
 import { PIXEL_RATIO_HIGH_CAP, PIXEL_RATIO_LOW } from '../config';
 import { BAND_COLORS, FACILITY_COLORS, hexToNumber, MATERIAL_COLORS } from '../theme';
 import { blockIndex, WORLD_X, WORLD_Y, WORLD_Z } from '../world';
+import type { World } from '../world';
+import type { EnergyField } from '../acoustics';
+import { sampleSoundView, soundViewStepForTier } from '../visualization';
 
 export function detectWebGL2(): boolean {
   if (typeof window === 'undefined') return false;
@@ -32,6 +35,14 @@ export class Renderer {
   private markers: THREE.Object3D[] = [];
   private rafId = 0;
   private onFrame: (() => void) | null = null;
+
+  /** S5：声场可视化点云（只读能量场采样，不参与模拟）。 */
+  private soundPoints: THREE.Points | null = null;
+  private soundPointVersion = -1;
+  private soundPointTier: GraphicTier | null = null;
+  private soundPointCount = 0;
+  /** S5：当前声场可视化点数（state.perf.visualInstances 唯一来源）。 */
+  visualInstances = 0;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -219,6 +230,67 @@ export class Renderer {
     marker.position.set(spawn[0] + 0.5, spawn[1] + 0.5, spawn[2] + 0.5);
     this.scene.add(marker);
     this.markers.push(marker);
+  }
+
+  /** S5：设置声场视图可见性（只隐藏/显示点云，不改变任何能量/世界数据）。 */
+  setSoundViewVisible(visible: boolean): void {
+    if (this.soundPoints) this.soundPoints.visible = visible;
+  }
+
+  /**
+   * S5：同源重建声场可视化点云。
+   * 只在 energyField.version 或图形档变化时重采样；采样值直接来自 energyField.sample。
+   */
+  updateSoundView(
+    field: Pick<EnergyField, 'sample'>,
+    world: World,
+    visible: boolean,
+    version: number,
+  ): void {
+    if (!this.renderer) {
+      this.visualInstances = 0;
+      return;
+    }
+    if (!visible) {
+      if (this.soundPoints) this.soundPoints.visible = false;
+      this.visualInstances = 0;
+      return;
+    }
+    if (
+      this.soundPoints &&
+      this.soundPointVersion === version &&
+      this.soundPointTier === this.tier
+    ) {
+      this.soundPoints.visible = true;
+      this.visualInstances = this.soundPointCount;
+      return;
+    }
+    const step = soundViewStepForTier(this.tier);
+    const sampled = sampleSoundView(field, world, step);
+    if (this.soundPoints) {
+      this.soundPoints.geometry.dispose();
+      (this.soundPoints.material as THREE.Material).dispose();
+      this.scene.remove(this.soundPoints);
+      this.soundPoints = null;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(sampled.positions, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(sampled.colors, 3));
+    const mat = new THREE.PointsMaterial({
+      size: this.tier === 'low' ? 0.3 : 0.38,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.75,
+      depthWrite: false,
+    });
+    const pts = new THREE.Points(geo, mat);
+    pts.visible = true;
+    this.scene.add(pts);
+    this.soundPoints = pts;
+    this.soundPointVersion = version;
+    this.soundPointTier = this.tier;
+    this.soundPointCount = sampled.count;
+    this.visualInstances = sampled.count;
   }
 
   start(onFrame: () => void): void {

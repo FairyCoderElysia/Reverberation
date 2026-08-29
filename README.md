@@ -1,6 +1,6 @@
 # Voice · 声学沙盒生存（3D 体素 Web 单机）
 
-浏览器端 3D 体素「声学沙盒生存」游戏原型。当前为 **Sprint 4：三频几何声学传播内核 + 能量场采样**。
+浏览器端 3D 体素「声学沙盒生存」游戏原型。当前为 **Sprint 5：声场视图可视化 + 性能档降级**。
 
 - 技术栈：Vite + TypeScript（strict）+ Three.js（WebGL2）+ Vitest
 - 无后端、无外部网络依赖（全程离线可玩）。
@@ -26,6 +26,7 @@
 │  ├─ game.ts            # S3 单权威运行时（世界/玩家/库存/合成/设施/时钟/存档）
 │  ├─ bench.ts           # 性能 spike：DDA 射线遍历基准
 │  ├─ apphook.ts         # M12 调试句柄 window.__app
+│  ├─ visualization.ts   # S5 声场可视化纯采样层（只读 energyField.sample、三频色带单源）
 │  ├─ ui.ts              # M10（最小子集）：材料面板 + 库存/合成 + 进度/状态
 │  └─ render/renderer.ts # M13 渲染（InstancedMesh + 第一/俯瞰双相机 + 设施网格）
 ├─ tests/                # Vitest（材料/世界/索引/句柄/S2/S3）
@@ -67,10 +68,12 @@ npm run build      # tsc --noEmit + vite build
   `timeOfDay` / `day` / `dayLengthSeconds` / `recipes` / `facilityDefs` / `facilities` /
   `inventory`（13 长度）/ `selected` / `placedBlocks` / `miningProgress` / `interactionReach` /
   `lastSavedAt` / `saveError` / `loadNotice` / `uiNotice` / `perf` / `blockAt(g)` /
-  `surfaceHeight(x,z)` / `surfaceHeights()` / `energyField.sample(g)` / `energyField.version`
+  `surfaceHeight(x,z)` / `surfaceHeights()` / `energyField.sample(g)` / `energyField.version` /
+  `graphicTier` / `soundView{visible,legend,version,tier}` / `sim{version,lastRecalcDurationMs,lastRecalcReason,rayCount,bounceCount,physicsHz}` /
+  `perf.visualInstances`
 - `reset()`：等价「新游戏」（换新种子 + 重置运行态 + 立即覆盖存档）
 - `debug`：`regenerate(seed)` / `setMaterial(id,patch)` / `resetMaterials()` /
-  `setGraphicTier('high'|'low')` / `benchRay(opts)` / `findMaterialBlocks(id)` /
+  `setGraphicTier('high'|'low')` / `setSoundView(visible)` / `benchRay(opts)` / `findMaterialBlocks(id)` /
   `giveItem(id,n)`（1..12）/ `teleport(pos)` / `saveNow()` / `loadSave()` / `clearSave()` /
   `setViewMode('first'|'orbit')` / `setOrbit(patch)` / `craft(recipeId)` /
   `placeFacility(kind,cell,yaw?)` / `rotateFacility(cell,deltaRadians?)` / `removeFacility(cell)` /
@@ -100,7 +103,20 @@ window.__app.debug.saveNow();
 - `debug.recalcAcoustics()` 手动强制重算；`debug.setTuning(patch)` / `debug.resetTuning()` 调整全局声学缩放（吸收/透射/距离指数/绕射强度）并立即重算。
 - 所有调试声学钩子均会校验输入；非法输入抛中文错误。
 
+## 声场视图
+
+- 按 `V` 或点击顶部“声场视图”按钮开关；状态统一存于 `state.soundView.visible`，`debug.setSoundView(bool)` 与 UI/热键共用同一状态。
+- 图例（低频/中频/高频文本 + 色块）与 `state.soundView.legend` 同步，色块来自 `src/theme.ts` 的 `BAND_COLORS` 单源。
+- 可视化只读 `state.energyField.sample(g)`：关闭/打开不改变任何能量读数、世界与存档；第一人称与俯瞰共用同一份声场数据。
+- `state.soundView.version` 与 `state.energyField.version` 同步；`state.soundView.tier` 派生自 `state.graphicTier`。
+
+## 性能档
+
+- `window.__app.debug.setGraphicTier('low')` 切换低配档：射线数 128→64、反弹 3→2、模拟目标频率 15→10Hz、像素比降到 0.75、声场可视化采样步长 2→3（`state.perf.visualInstances` 可读）。
+- `state.sim` 可读最近一次重算版本、耗时、原因（`initial/world/source/tuning/manual`）、当前射线/反弹数与目标物理频率。
+- 低档允许能量数值变化，但材料方向性结论（泡沫吸高频、混凝土隔低频、反射/绕射定性）保持不变。
+
 ## 降级
 
 - URL 带 `?nogl=1` 或浏览器不支持 WebGL2 时：显示中文降级提示（不白屏），`window.__app` 仍可用。
-- `window.__app.debug.setGraphicTier('low')` 降低渲染像素比（`state.perf.pixelRatio` 可读）。
+- `window.__app.debug.setGraphicTier('low')` 降低渲染像素比（`state.perf.pixelRatio` 可读），同时降低声学精度与声场可视化密度。

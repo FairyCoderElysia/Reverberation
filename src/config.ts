@@ -78,6 +78,30 @@ export const ACOUSTIC_DEFAULT_PARAMS = {
   fieldThreshold: 1e-6,
 } as const;
 
+/** Sprint 5 性能档：high 档射线/反弹预算（与默认档一致）。 */
+export const ACOUSTIC_PARAMS_HIGH = {
+  rays: 128,
+  bounces: 3,
+  diffract: true,
+  fieldThreshold: 1e-6,
+} as const;
+
+/** Sprint 5 性能档：low 档射线/反弹预算（tech-design §5.4：64×2）。 */
+export const ACOUSTIC_PARAMS_LOW = {
+  rays: 64,
+  bounces: 2,
+  diffract: true,
+  fieldThreshold: 1e-6,
+} as const;
+
+/** Sprint 5 性能档：模拟目标频率（可 null；本版为事件触发式，读作目标值）。 */
+export const SIM_PHYSICS_HZ_HIGH = 15;
+export const SIM_PHYSICS_HZ_LOW = 10;
+
+/** Sprint 5 声场视图采样密度：high 每 2 格采样一次，low 每 3 格采样一次（保证 low visualInstances 严格下降）。 */
+export const SOUND_VIEW_SAMPLE_STEP_HIGH = 2;
+export const SOUND_VIEW_SAMPLE_STEP_LOW = 3;
+
 /** 声学全局缩放默认值（唯一夸张层；debug.setTuning 可覆写运行时副本）。 */
 export const ACOUSTIC_DEFAULT_TUNING = {
   G_ABSORB: 1.0,

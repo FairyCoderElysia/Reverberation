@@ -8,7 +8,7 @@ import { generateWorld } from './worldgen';
 import { Game } from './game';
 import { applyLook } from './player';
 import { Renderer } from './render/renderer';
-import { inventorySignature, renderInventory, renderMaterialPanel, renderMiningProgress, renderRecipes, renderStatus, shouldRefreshInventory } from './ui';
+import { inventorySignature, renderInventory, renderMaterialPanel, renderMiningProgress, renderRecipes, renderSoundLegend, renderSoundViewButton, renderStatus, shouldRefreshInventory } from './ui';
 import { LOOK_SENSITIVITY } from './config';
 import type { GraphicTier } from './types';
 
@@ -64,6 +64,8 @@ function bootInner(): void {
   // 8. 首帧世界快照 + 面板
   renderer.rebuildWorld(game.world.ids, game.world.facilityList(), game.soundSources, game.spawn);
   renderMaterialPanel(app.state.materials);
+  renderSoundLegend(app.state.soundView.legend);
+  renderSoundViewButton(app.state.soundView.visible);
   lastWorldRev = game.world.revision;
 
   // 库存栏点选回调（与热键同一状态入口：game.selected）
@@ -88,6 +90,7 @@ function bootInner(): void {
   // 10. 帧循环（物理固定步 + 视图 + UI 回流）
   let lastInvSig = inventorySignature(game.inventory);
   let lastSelected = game.selected;
+  let lastSoundViewVisible = game.soundViewVisible;
   const onFrame = (): void => {
     const now = performance.now();
     const dtMs = now - lastT;
@@ -104,6 +107,8 @@ function bootInner(): void {
     } else {
       renderer.setView(game.playerEye(), game.body.yaw, game.body.pitch);
     }
+    // S5：声场视图（只读同源采样；能量场/世界不受可视化开关影响）
+    renderer.updateSoundView(app.state.energyField, game.world, game.soundViewVisible, app.state.soundView.version);
 
     frameCount += 1;
     accMs += dtMs;
@@ -115,7 +120,13 @@ function bootInner(): void {
     }
     app.state.perf.drawCalls = renderer.drawCalls;
     app.state.perf.instances = renderer.instances;
+    app.state.perf.visualInstances = renderer.visualInstances;
     app.state.perf.pixelRatio = renderer.getPixelRatio();
+    if (game.soundViewVisible !== lastSoundViewVisible) {
+      lastSoundViewVisible = game.soundViewVisible;
+      renderSoundLegend(app.state.soundView.legend);
+      renderSoundViewButton(app.state.soundView.visible);
+    }
 
     renderMiningProgress(game.miningProgress);
     // UI 与 state 恒一致（SP2-06）：库存/选中任一变化后同帧重绘库存栏。
@@ -184,6 +195,9 @@ function bindInput(game: Game, renderer: Renderer): void {
     if (e.code === 'KeyR') {
       if (!e.repeat) game.rotateLookedFacility();
     }
+    if (e.code === 'KeyV') {
+      if (!e.repeat) game.setSoundView(!game.soundViewVisible);
+    }
     keys.add(e.code);
     syncKeys();
   });
@@ -244,6 +258,12 @@ function bindInput(game: Game, renderer: Renderer): void {
     if (viewBtn) {
       viewBtn.addEventListener('click', () => {
         game.toggleViewMode();
+      });
+    }
+    const soundViewBtn = document.getElementById('sound-view-toggle');
+    if (soundViewBtn) {
+      soundViewBtn.addEventListener('click', () => {
+        game.setSoundView(!game.soundViewVisible);
       });
     }
     canvas.addEventListener('click', () => {
@@ -342,7 +362,7 @@ function showBootError(err: unknown): void {
   el.style.display = 'block';
   if (!window.__app) {
     window.__app = {
-      state: { ready: false, perf: { fps: 0, avgFrameMs: 0, drawCalls: 0, instances: 0, pixelRatio: 0, lastBench: null } },
+      state: { ready: false, perf: { fps: 0, avgFrameMs: 0, drawCalls: 0, instances: 0, visualInstances: 0, pixelRatio: 0, lastBench: null } },
       reset: () => {},
       debug: {},
     } as unknown as __App;

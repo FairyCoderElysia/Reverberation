@@ -27,6 +27,8 @@ import type { AcousticEvent, AcousticTuning, BandEnergy, EnergyField } from './a
 import { findStandingSpawn, generateWorld } from './worldgen';
 import type { GeneratedWorld } from './worldgen';
 import {
+  ACOUSTIC_PARAMS_HIGH,
+  ACOUSTIC_PARAMS_LOW,
   ACOUSTIC_TUNING_RANGES,
   AUTOSAVE_MOVE_INTERVAL_MS,
   INTERACTION_REACH,
@@ -39,9 +41,11 @@ import {
   PLAYER_EYE_HEIGHT,
   SAVE_SIZE_WARN_BYTES,
   SAVE_VERSION,
+  SIM_PHYSICS_HZ_HIGH,
+  SIM_PHYSICS_HZ_LOW,
 } from './config';
 import { inBounds, World, WORLD_X, WORLD_Y, WORLD_Z } from './world';
-import type { FacilityKind, FacilitySnapshot, OrbitState, SoundSource, XYZA } from './types';
+import type { FacilityKind, FacilitySnapshot, GraphicTier, LastRecalcReason, OrbitState, SoundSource, XYZA } from './types';
 
 export interface GameOptions {
   storage?: StorageLike;
@@ -97,6 +101,17 @@ export class Game {
   private fixedSourcesEnabled = true;
   /** S4 会话级调试声源。 */
   private debugSources: AcousticEvent[] = [];
+
+  /** S5 全局图形档（与 debug.setGraphicTier / state.graphicTier 同源）。 */
+  graphicTier: GraphicTier = 'high';
+  /** S5 声场视图开关（UI/热键/debug.setSoundView 共用同一状态）。 */
+  soundViewVisible = true;
+  /** S5 最近一次声学全量重算耗时（ms，有限数）。 */
+  lastRecalcDurationMs = 0;
+  /** S5 最近一次声学全量重算原因（规定枚举）。 */
+  lastRecalcReason: LastRecalcReason = 'initial';
+  /** S5 模拟目标频率（事件触发式；可 null）。 */
+  simPhysicsHz: number | null = SIM_PHYSICS_HZ_HIGH;
 
   body: PlayerBody;
   inventory: number[];
@@ -184,7 +199,7 @@ export class Game {
 
     // S4：声学引擎与初始能量场（固定环境源默认参与）。
     this.acoustics = new AcousticEngine(this.world, () => this.materialSpecs());
-    this.recalcAcoustics();
+    this.recalcAcoustics('initial');
   }
 
   /* ================= 玩家读取 ================= */
@@ -227,9 +242,29 @@ export class Game {
     return env.concat(this.debugSources);
   }
 
-  recalcAcoustics(): EnergyField {
+  recalcAcoustics(reason: LastRecalcReason = 'manual'): EnergyField {
+    const t0 = this.now();
     this.energyField = this.acoustics.recalc(this.activeSoundEvents());
+    const elapsed = this.now() - t0;
+    this.lastRecalcDurationMs = Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0;
+    this.lastRecalcReason = reason;
     return this.energyField;
+  }
+
+  /** S5：声场视图开关（UI/热键/debug 共用；只改会话显示状态，不写档/不重算）。 */
+  setSoundView(visible: boolean): void {
+    this.soundViewVisible = visible;
+  }
+
+  /** S5：设置全局图形档（性能降级/恢复，同时更新声学精度档并立即重算）。 */
+  setGraphicTier(tier: GraphicTier): void {
+    if (tier !== 'high' && tier !== 'low') {
+      throw new Error('setGraphicTier: tier 需为 high 或 low');
+    }
+    this.graphicTier = tier;
+    this.acoustics.setParams(tier === 'high' ? { ...ACOUSTIC_PARAMS_HIGH } : { ...ACOUSTIC_PARAMS_LOW });
+    this.simPhysicsHz = tier === 'high' ? SIM_PHYSICS_HZ_HIGH : SIM_PHYSICS_HZ_LOW;
+    this.recalcAcoustics('manual');
   }
 
   /**
@@ -238,14 +273,14 @@ export class Game {
    * 避免把 recalcAcoustics 散落各处导致路径遗漏。
    */
   notifyWorldChanged(): EnergyField {
-    return this.recalcAcoustics();
+    return this.recalcAcoustics('world');
   }
 
   /** 清除全部声源（含固定环境源），并立即重算为空能量场。 */
   clearSources(): void {
     this.fixedSourcesEnabled = false;
     this.debugSources = [];
-    this.recalcAcoustics();
+    this.recalcAcoustics('source');
   }
 
   /** 添加一个会话级调试声源；校验非法输入后立即重算。 */
@@ -259,7 +294,7 @@ export class Game {
       power: cpower,
       ...(cdir ? { dir: cdir } : {}),
     });
-    this.recalcAcoustics();
+    this.recalcAcoustics('source');
   }
 
   /** 调谐声学全局缩放（仅会话级）；非法/非有限值抛中文错误。 */
@@ -288,13 +323,13 @@ export class Game {
       cleaned[key] = v;
     }
     this.acoustics.setTuning(cleaned);
-    this.recalcAcoustics();
+    this.recalcAcoustics('tuning');
   }
 
   /** 恢复声学全局缩放默认，并立即重算。 */
   resetTuning(): void {
     this.acoustics.resetTuning();
-    this.recalcAcoustics();
+    this.recalcAcoustics('tuning');
   }
 
   /* ================= 主循环 ================= */
