@@ -144,6 +144,16 @@ export function renderMiningProgress(progress: number): void {
   if (fill) fill.style.width = pct + '%';
 }
 
+/** S6：渲染全局储能读数（与 state.coreEnergy 同源；UI 只读显示，不写状态）。 */
+export function renderEnergyReadout(coreEnergy: number): void {
+  const el = document.getElementById('energy-readout');
+  if (!el) return;
+  const display = Number.isFinite(coreEnergy) ? Math.max(0, coreEnergy).toFixed(2) : '0.00';
+  if (el.textContent !== '全局储能：' + display) {
+    el.textContent = '全局储能：' + display;
+  }
+}
+
 /** 渲染状态行（存档错误 / 载入提示等中文可见提示）。 */
 export function renderStatus(message: string | null): void {
   const el = document.getElementById('status-line');

@@ -9,6 +9,7 @@ import { mergeTriplet } from './materials';
 import type { MaterialOverrides } from './materials';
 import type { Game } from './game';
 import { DAY_LENGTH_SECONDS, INTERACTION_REACH } from './config';
+import { blockCoords } from './world';
 import type { BandEnergy, FacilityKind, FacilitySnapshot, GraphicTier, OrbitState, PerfState, SimState, SoundSource, SoundViewState, XYZA } from './types';
 import type { BlockRef } from './types';
 import { FACILITY_DEFS, RECIPES } from './recipes';
@@ -38,10 +39,14 @@ export interface AppState {
   dayLengthSeconds: number;
   /** S3：配方表（与合成 UI 同源） */
   recipes: ReturnType<typeof recipeCopies>;
-  /** S3：设施能力定义（全部 implemented:false / abilities 全 false） */
+  /** S3/S6：设施能力定义（core/probe 真实实现；cannon/duct/relay 无真实能力） */
   facilityDefs: ReturnType<typeof facilityDefCopies>;
   /** S3：已放置设施快照（{cell,kind,yaw}，cell 单一来源） */
   facilities: FacilitySnapshot[];
+  /** S6：全局能量池（唯一储能字段；多核心采收同一池，不提供 state.core.energy 实例语义） */
+  coreEnergy: number;
+  /** S6：探针实时只读读数（与 energyField.sample 同源；不持久化） */
+  probes: { cell: XYZA; reading: BandEnergy }[];
   /** S2：库存（副本，index 1..12 为物品数量） */
   inventory: number[];
   /** S2：当前选中物品 id（1..12） */
@@ -107,6 +112,10 @@ export interface DebugHooks {
   rotateFacility: (cell: XYZA, deltaRadians?: number) => { ok: boolean; reason: string };
   removeFacility: (cell: XYZA) => { ok: boolean; reason: string };
   // S4 增量
+  /** S6：会话级设置全局储能（有限非负；不写档，reset 恢复默认） */
+  setCoreEnergy: (e: number) => void;
+  /** S6：读取任意格实时声能（不要求先放置探针；非法/越界/NaN 抛中文错误） */
+  probeAt: (cell: XYZA) => BandEnergy;
   emitSource: (pos: XYZA, power?: BandEnergy, dir?: XYZA) => void;
   clearSources: () => void;
   recalcAcoustics: () => void;
@@ -135,7 +144,7 @@ function facilityDefCopies() {
     kind: f.kind,
     name: f.name,
     itemId: f.itemId,
-    implemented: false as const,
+    implemented: f.implemented,
     abilities: { ...f.abilities },
   }));
 }
@@ -229,6 +238,18 @@ export function buildApp(
     },
     get facilities() {
       return game.facilitySnapshots().map((f) => ({ cell: [...f.cell] as XYZA, kind: f.kind, yaw: f.yaw }));
+    },
+    get coreEnergy() {
+      return game.coreEnergy;
+    },
+    get probes() {
+      return game.world
+        .facilityStates()
+        .filter((f) => f.kind === 'probe')
+        .map((f) => ({
+          cell: blockCoords(f.pos),
+          reading: game.energyField.sample(blockCoords(f.pos)),
+        }));
     },
     get inventory() {
       return game.inventory.slice();
@@ -402,6 +423,12 @@ export function buildApp(
     },
     removeFacility: (cell) => {
       return game.removeFacility(cell);
+    },
+    setCoreEnergy: (e) => {
+      game.setCoreEnergy(e);
+    },
+    probeAt: (cell) => {
+      return game.probeAt(cell);
     },
     emitSource: (pos, power, dir) => {
       game.emitSource(pos, power, dir);

@@ -1,12 +1,15 @@
 /**
- * M9 存档（S2 初版 + S3 v2 扩展）：单键 localStorage + schema version + RLE 二进制。
+ * M9 存档（S2 初版 + S3 v2 扩展 + S6 v3）：单键 localStorage + schema version + RLE 二进制。
  * S2：ids/placed 二进制，durability 不单独序列化（恢复时由材料常量派生）。
  * S3：SAVE_VERSION=2，payload 增加 facilities（{cell,kind,yaw}）、timeOfDay、day，
  *     并对旧 v1 档自动迁移（补零库存、selected 夹取、设施空、时间 0/day 0）。
- * 损坏 / 版本 0、3+ 仍按 invalid 处理并中文提示，不白屏。
+ * S6：SAVE_VERSION=3，持久化 coreEnergy；v2→v3 迁移 coreEnergy=0、清洗与 3 个固定
+ *     声源格重叠的方块/设施；v1 仍按 v1→v2→v3 链式兼容，不报版本不兼容。
+ * 损坏 / 版本 0、4+ 仍按 invalid 处理并中文提示，不白屏。
  */
 import { SAVE_KEY, SAVE_VERSION } from './config';
 import { WORLD_X, WORLD_Y, WORLD_Z } from './world';
+import { SOUND_SOURCE_DEFS } from './worldgen';
 import type { FacilitySnapshot, FacilityKind } from './types';
 
 /** 可注入存储（浏览器为 localStorage；测试可用内存 Map 替代）。 */
@@ -20,6 +23,7 @@ export interface StorageLike {
 export interface SavePayload {
   version: number;
   seed: number;
+  coreEnergy: number;
   ids: Uint8Array;
   placed: Uint8Array;
   inventory: number[];
@@ -138,7 +142,7 @@ export function parseSave(text: string): ParseResult {
     return { ok: false, error: '存档数据损坏（JSON 解析失败），已回退到全新世界。' };
   }
   const o = raw as Record<string, unknown>;
-  if (typeof o.version !== 'number' || (o.version !== 1 && o.version !== SAVE_VERSION)) {
+  if (typeof o.version !== 'number' || (o.version !== 1 && o.version !== 2 && o.version !== 3)) {
     return {
       ok: false,
       error: '存档版本不兼容（version=' + String(o.version) + '，当前支持 v' + SAVE_VERSION + '），已回退到全新世界。',
@@ -194,11 +198,30 @@ export function parseSave(text: string): ParseResult {
       ? Math.floor(o.day)
       : 0;
 
+  const coreEnergy =
+    o.version === 3 && finite(o.coreEnergy)
+      ? Math.max(0, o.coreEnergy)
+      : 0;
+
+  // v1/v2 旧档迁移：coreEnergy 归 0，并清洗与 3 个固定声源格重叠的方块/设施。
+  if (o.version < 3) {
+    for (const cell of SOUND_SOURCE_DEFS) {
+      const i = cell.pos[0] + WORLD_X * (cell.pos[2] + WORLD_Z * cell.pos[1]);
+      ids[i] = 0;
+      placed[i] = 0;
+    }
+  }
+  const facilitiesV3 =
+    o.version < 3
+      ? facilities.filter((f) => !SOUND_SOURCE_DEFS.some((s) => s.pos[0] === f.cell[0] && s.pos[1] === f.cell[1] && s.pos[2] === f.cell[2]))
+      : facilities;
+
   return {
     ok: true,
     payload: {
       version: o.version,
       seed: o.seed,
+      coreEnergy,
       ids,
       placed,
       inventory,
@@ -206,7 +229,7 @@ export function parseSave(text: string): ParseResult {
       playerPos,
       playerYaw: finite(o.playerYaw) ? o.playerYaw : 0,
       playerPitch: finite(o.playerPitch) ? o.playerPitch : 0,
-      facilities,
+      facilities: facilitiesV3,
       timeOfDay,
       day,
       savedAt: finite(o.savedAt) ? o.savedAt : 0,
@@ -219,6 +242,7 @@ export function serializeSave(p: SavePayload): string {
   return JSON.stringify({
     version: p.version,
     seed: p.seed,
+    coreEnergy: p.coreEnergy,
     idsB64: encodeRle(p.ids),
     placedB64: encodeRle(p.placed),
     inventory: p.inventory,

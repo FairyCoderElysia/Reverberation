@@ -300,6 +300,13 @@ html, body {
 }
 
 /* ===== Sprint 5：声场视图开关/图例 ===== */
+.energy-readout {
+  margin-top: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  text-shadow: 0 0 8px rgba(0, 255, 205, 0.25);
+}
 .sound-view-toggle {
   left: calc(50% + 150px);
   transform: translateX(-50%);

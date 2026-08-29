@@ -31,6 +31,8 @@ import {
   ACOUSTIC_PARAMS_LOW,
   ACOUSTIC_TUNING_RANGES,
   AUTOSAVE_MOVE_INTERVAL_MS,
+  HARVEST_EFFICIENCY,
+  HARVEST_TICK_MS,
   INTERACTION_REACH,
   JUMP_BUFFER_MS,
   MINING_SECONDS,
@@ -44,7 +46,7 @@ import {
   SIM_PHYSICS_HZ_HIGH,
   SIM_PHYSICS_HZ_LOW,
 } from './config';
-import { inBounds, World, WORLD_X, WORLD_Y, WORLD_Z } from './world';
+import { blockCoords, inBounds, World, WORLD_X, WORLD_Y, WORLD_Z } from './world';
 import type { FacilityKind, FacilitySnapshot, GraphicTier, LastRecalcReason, OrbitState, SoundSource, XYZA } from './types';
 
 export interface GameOptions {
@@ -106,6 +108,10 @@ export class Game {
   graphicTier: GraphicTier = 'high';
   /** S5 声场视图开关（UI/热键/debug.setSoundView 共用同一状态）。 */
   soundViewVisible = true;
+  /** S6：全局能量池（唯一全局储能字段；所有核心设施采收/汇入同一池）。 */
+  coreEnergy = 0;
+  /** S6：采收计时器（ms）；每个 core 设施按 HARVEST_TICK_MS 结算。 */
+  private harvestTickAccumMs = 0;
   /** S5 最近一次声学全量重算耗时（ms，有限数）。 */
   lastRecalcDurationMs = 0;
   /** S5 最近一次声学全量重算原因（规定枚举）。 */
@@ -348,6 +354,7 @@ export class Game {
       this.jumpBufferMs = physInput.jumpBufferMs ?? 0;
     }
     this.clock.advance(dt);
+    this.updateHarvest(dt);
     this.updateMoveAutoSave(dt);
     if (this.clock.updateAutoSave(dt, AUTOSAVE_MOVE_INTERVAL_MS)) {
       this.autoSave();
@@ -357,6 +364,62 @@ export class Game {
       this.placePressed = false;
       this.tryPlaceSelected();
     }
+  }
+
+  /**
+   * S6 核心采收：每个 core 设施每 HARVEST_TICK_MS 结算一次。
+   * Δ = η * Σ_b energyField.sample(coreCell)[b]；只增不减（调试 setCoreEnergy 除外）。
+   */
+  private updateHarvest(dtMs: number): void {
+    this.harvestTickAccumMs += dtMs;
+    while (this.harvestTickAccumMs >= HARVEST_TICK_MS) {
+      this.harvestTickAccumMs -= HARVEST_TICK_MS;
+      this.harvestCore();
+    }
+  }
+
+  private harvestCore(): void {
+    const cores = this.world.facilityStates().filter((f) => f.kind === 'core');
+    if (cores.length === 0) return;
+    let delta = 0;
+    for (const core of cores) {
+      const cell = blockCoords(core.pos);
+      const e = this.energyField.sample(cell);
+      delta += HARVEST_EFFICIENCY * (e[0] + e[1] + e[2]);
+    }
+    if (delta > 0) this.coreEnergy += delta;
+  }
+
+  /** S6 会话级设置全局储能；有限非负，不写存档，reset 恢复默认。 */
+  setCoreEnergy(value: number): void {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+      throw new Error('setCoreEnergy: 必须为有限非负数');
+    }
+    this.coreEnergy = value;
+  }
+
+  /** S6 探针调试读取：不要求先放置探针；合法格无能量返回 [0,0,0]。 */
+  probeAt(cell: unknown): [number, number, number] {
+    if (!Array.isArray(cell) || cell.length !== 3) {
+      throw new Error('probeAt: cell 需为 [x,y,z] 三元素数组');
+    }
+    const [x, y, z] = cell as unknown[];
+    if (
+      typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number' ||
+      !Number.isInteger(x) || !Number.isInteger(y) || !Number.isInteger(z) ||
+      !Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)
+    ) {
+      throw new Error('probeAt: cell 必须为整数坐标三元组');
+    }
+    if (!inBounds(x, y, z)) {
+      throw new Error('probeAt: cell 超出世界边界');
+    }
+    return this.energyField.sample([x, y, z]);
+  }
+
+  /** S6：3 个固定环境声源格不可被普通方块/设施占用。 */
+  isSoundSourceCell(cell: XYZA): boolean {
+    return this.soundSources.some((s) => s.pos[0] === cell[0] && s.pos[1] === cell[1] && s.pos[2] === cell[2]);
   }
 
   teleport(pos: XYZA): void {
@@ -472,6 +535,10 @@ export class Game {
     const [x, y, z] = cell;
     if (!inBounds(x, y, z)) return;
     if (this.world.blockAt(cell).material === 0) return;
+    if (this.isSoundSourceCell(cell)) {
+      this.uiNotice = '固定声源格不可挖掘/拆除';
+      return;
+    }
     this.world.removeBlock(cell);
     const refund = BREAK_REFUND;
     this.inventory[material] = Math.max(0, this.inventory[material]) + refund;
@@ -531,6 +598,10 @@ export class Game {
     if (cellOverlapsPlayer(this.body.pos, placeCell)) {
       this.uiNotice = '不能放置到玩家身体内';
       return { ok: false, reason: '不能放置到玩家身体内' };
+    }
+    if (this.isSoundSourceCell(placeCell)) {
+      this.uiNotice = '固定声源格不可放置方块/设施';
+      return { ok: false, reason: '固定声源格不可放置' };
     }
     if (id >= 8 && id <= 12) {
       const kind = facilityKindForItem(id);
@@ -615,6 +686,10 @@ export class Game {
 
   private placeFacilityAtCell(kind: FacilityKind, cell: XYZA, yaw: number): { ok: boolean; reason: string } {
     assertFiniteYaw(yaw);
+    if (this.isSoundSourceCell(cell)) {
+      this.uiNotice = '固定声源格不可放置方块/设施';
+      return { ok: false, reason: '固定声源格不可放置' };
+    }
     const itemId = facilityItemIdForKind(kind);
     if ((this.inventory[itemId] ?? 0) <= 0) {
       this.uiNotice = '库存不足：无法放置「' + itemName(itemId) + '」';
@@ -695,6 +770,7 @@ export class Game {
       const payload: SavePayload = {
         version: SAVE_VERSION,
         seed: this.seed,
+        coreEnergy: this.coreEnergy,
         ids: this.world.ids,
         placed: this.world.placed,
         inventory: this.inventory.slice(),
@@ -801,6 +877,7 @@ export class Game {
     this.spawn = findStandingSpawn(this.world, Math.floor(p.playerPos[0]), Math.floor(p.playerPos[2]));
     this.inventory = p.inventory.slice();
     this.selected = p.selected;
+    this.coreEnergy = p.coreEnergy;
     this.timeOfDay = p.timeOfDay;
     this.day = p.day;
     this.body = {
@@ -823,7 +900,11 @@ export class Game {
     this.clock.markSaved();
     this.nextFacilityId = this.world.facilityStates().reduce((mx, f) => Math.max(mx, f.id), 0) + 1;
     this.notifyWorldChanged();
-    this.loadNotice = null;
+    // v2→v3 迁移给出一次性中文提示（v1 仍静默链式迁移，保持既有行为）。
+    this.loadNotice =
+      p.version === 2
+        ? '存档已从 v2 迁移至 v3：全局储能已重置为 0，已移除与 3 个固定声源格重叠的方块/设施。'
+        : null;
     return 'loaded';
   }
 
@@ -911,6 +992,8 @@ export class Game {
       target: [this.spawn[0] + 0.5, this.spawn[1] + 2, this.spawn[2] + 0.5],
     };
     this.nextFacilityId = 1;
+    this.coreEnergy = 0;
+    this.harvestTickAccumMs = 0;
     this.cancelMining();
     this.autoSave();
   }

@@ -8,7 +8,7 @@ import { generateWorld } from './worldgen';
 import { Game } from './game';
 import { applyLook } from './player';
 import { Renderer } from './render/renderer';
-import { inventorySignature, renderInventory, renderMaterialPanel, renderMiningProgress, renderRecipes, renderSoundLegend, renderSoundViewButton, renderStatus, shouldRefreshInventory } from './ui';
+import { inventorySignature, renderEnergyReadout, renderInventory, renderMaterialPanel, renderMiningProgress, renderRecipes, renderSoundLegend, renderSoundViewButton, renderStatus, shouldRefreshInventory } from './ui';
 import { LOOK_SENSITIVITY } from './config';
 import type { GraphicTier } from './types';
 
@@ -87,6 +87,7 @@ function bootInner(): void {
 
   // 载入结果的中文提示（损坏/版本不兼容可见、不白屏）；优先级同样是存档异常优先
   renderStatus(game.saveError ?? game.loadNotice ?? game.uiNotice);
+  renderEnergyReadout(game.coreEnergy);
 
   // 9. 第一人称输入绑定
   bindInput(game, renderer);
@@ -144,6 +145,7 @@ function bootInner(): void {
         game.craft(recipeId);
       });
     }
+    renderEnergyReadout(game.coreEnergy);
     // 优先级：存档/载入异常 > 交互提示，避免 uiNotice 长期遮蔽 saveError/loadNotice（QA Mn4）
     renderStatus(game.saveError ?? game.loadNotice ?? game.uiNotice);
   };

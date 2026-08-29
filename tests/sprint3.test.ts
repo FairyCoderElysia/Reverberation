@@ -230,10 +230,10 @@ describe('S3 存档 v2 与迁移', () => {
     expect(Array.from(g2.world.placed)).toEqual(Array.from(g1.world.placed));
     expect(g2.playerPos).toEqual(g1.playerPos);
 
-    // 下次写档版本为 2
+    // 下次写档版本为 3（v1 也会链式迁移到当前 v3）
     g2.writeSave();
     const raw = JSON.parse(storage.getItem('voice.save.v1')!) as Record<string, unknown>;
-    expect(raw.version).toBe(2);
+    expect(raw.version).toBe(3);
   });
 
   it('parseFacilities 拒绝非整数/越界 cell（Minor #10）', () => {
@@ -271,18 +271,23 @@ describe('S3 存档 v2 与迁移', () => {
   });
 });
 
-describe('S3 设施定义无行为（SP3-08）', () => {
-  it('facilityDefs 5 类且 implemented=false、abilities 全 false', () => {
+describe('S6 设施定义精确 schema（SP6-08）', () => {
+  it('facilityDefs 5 类：core/probe implemented=true 且能力精确，其余无真实能力', () => {
     const { app } = makeApp();
     expect(app.state.facilityDefs).toHaveLength(5);
     expect(FACILITY_DEFS).toHaveLength(5);
-    for (const f of app.state.facilityDefs) {
-      expect(f.implemented).toBe(false);
-      expect(f.abilities.core).toBe(false);
-      expect(f.abilities.cannon).toBe(false);
-      expect(f.abilities.probe).toBe(false);
-      expect(f.abilities.duct).toBe(false);
-      expect(f.abilities.relay).toBe(false);
+    const defs = Object.fromEntries(app.state.facilityDefs.map((f) => [f.kind, f]));
+    expect(defs.core.implemented).toBe(true);
+    expect(defs.core.abilities).toEqual({ store: true });
+    expect(defs.probe.implemented).toBe(true);
+    expect(defs.probe.abilities).toEqual({ read: true });
+    for (const kind of ['cannon', 'duct', 'relay'] as const) {
+      expect(defs[kind].implemented).toBe(false);
+      expect(defs[kind].abilities).toEqual({});
+    }
+    const allKeys = new Set(app.state.facilityDefs.flatMap((f) => Object.keys(f.abilities)));
+    for (const forbidden of ['logic', 'and', 'or', 'not', 'memory', 'clock']) {
+      expect(allKeys.has(forbidden)).toBe(false);
     }
   });
 });

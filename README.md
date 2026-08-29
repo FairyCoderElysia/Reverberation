@@ -1,6 +1,6 @@
 # Voice · 声学沙盒生存（3D 体素 Web 单机）
 
-浏览器端 3D 体素「声学沙盒生存」游戏原型。当前为 **Sprint 5：声场视图可视化 + 性能档降级**。
+浏览器端 3D 体素「声学沙盒生存」游戏原型。当前为 **Sprint 6：能量核心采收 + 声学探针**。
 
 - 技术栈：Vite + TypeScript（strict）+ Three.js（WebGL2）+ Vitest
 - 无后端、无外部网络依赖（全程离线可玩）。
@@ -12,7 +12,7 @@
 ├─ css/style.css         # 深色声学实验室风格样式
 ├─ src/
 │  ├─ main.ts            # 启动编排（载档→生成世界→渲染→输入绑定→__app→循环）
-│  ├─ config.ts          # 可调参数常量（唯一来源，含 S2/S3 玩家物理/交互/存档/时钟、S5 性能档）
+│  ├─ config.ts          # 可调参数常量（唯一来源，含 S2/S3 玩家物理/交互/存档/时钟、S5 性能档、S6 采收周期/效率）
 │  ├─ materials.ts       # M2 材料表（唯一数据源，tech-design §3.1）
 │  ├─ acoustics.ts       # M3 三频几何声学传播内核（S4；S5 性能档/方向回归基础方向集）
 │  ├─ recipes.ts         # S3 配方/物品/设施定义（唯一数据源）
@@ -22,14 +22,14 @@
 │  ├─ world.ts           # M1 体素存储 + 索引公式 + DDA 遍历 + placed 标记 + 设施 Map
 │  ├─ player.ts          # 确定性第一人称物理（重力/跳跃/AABB 碰撞，设施视为实体）
 │  ├─ pick.ts            # 体素拾取（唯一 DDA 实现处，设施可被拾取/放置相邻）
-│  ├─ save.ts            # M9 存档 v2（RLE+base64，schema 版本 + v1 迁移 + 损坏兜底）
-│  ├─ game.ts            # S3 单权威运行时（世界/玩家/库存/合成/设施/时钟/存档；S5 会话档/声场/性能指标）
+│  ├─ save.ts            # M9 存档 v3（RLE+base64，schema 版本 + v1/v2 链式迁移 + 损坏兜底）
+│  ├─ game.ts            # S3 单权威运行时（世界/玩家/库存/合成/设施/时钟/存档；S5 会话档/声场/性能指标；S6 全局能量池/采收/探针钩子）
 │  ├─ bench.ts           # 性能 spike：DDA 射线遍历基准
 │  ├─ apphook.ts         # M12 调试句柄 window.__app
 │  ├─ visualization.ts   # S5 声场可视化纯采样层（只读 energyField.sample、三频色带单源）
 │  ├─ ui.ts              # M10（最小子集）：材料面板 + 库存/合成 + 进度/状态 + 声场图例/按钮
 │  └─ render/renderer.ts # M13 渲染（InstancedMesh + 第一/俯瞰双相机 + 设施网格 + S5 声场点云）
-├─ tests/                # Vitest（材料/世界/索引/句柄/S2/S3/S4/S5）
+├─ tests/                # Vitest（材料/世界/索引/句柄/S2/S3/S4/S5/S6）
 ```
 
 ## 安装与启动
@@ -53,19 +53,22 @@ npm run build      # tsc --noEmit + vite build
 - **合成**：左下面板列出 5 个配方（能量核心/声波炮/声学探针/声导管/中继器），点击“合成”按钮按配方扣材料并产出设施物品；库存不足时显示失败提示。
 - **设施旋转**：准星对着已放置设施按 `R` 键，每次旋转 90°（π/2 弧度）。
 - 交互距离上限 6 格（`state.interactionReach` 可读）。
+- **能量核心**：放置后自动按 `HARVEST_TICK_MS`（500ms）从所在格的能量场采收至全局池 `state.coreEnergy`，采收效率 `HARVEST_EFFICIENCY=0.5`；多个核心共享同一池。
+- **声学探针**：放置后 `state.probes` 实时显示探针位置与三频读数，读数与 `state.energyField.sample(cell)` 同源；探针只读、不耗能、不产生伤害。
 
 ## 存档
 
-- 单档本地自动存档（`localStorage` 键 `voice.save.v1`，**schema v2**）。
+- 单档本地自动存档（`localStorage` 键 `voice.save.v1`，**schema v3**）。
 - 挖掘 / 放置 / 合成 / 设施变化后同帧自动写档；玩家移动与**时钟推进**共享节流自动保存（默认 2s），静止时 `timeOfDay` 变化也会落盘。
-- 启动自动载入唯一存档；损坏 / 版本 0、3+ 给出中文提示并回退全新世界；旧 v1 档自动迁移（库存补零到 13、selected 夹取、设施空、`timeOfDay=0/day=0`，下次写档为 v2）。
-- 存档覆盖：世界方块（ids + placed 标记）、库存（13 长度）、selected、玩家位置、设施列表、`timeOfDay`、`day`、种子。
+- 启动自动载入唯一存档；损坏 / 版本 0、4+ 给出中文提示并回退全新世界；旧 v1/v2 档自动链式迁移到 v3：v1 保留原有迁移语义，v2→v3 将全局储能重置为 0、移除与 3 个固定声源格重叠的方块/设施并给一次性中文提示；下次写档均为 v3。
+- 存档覆盖：世界方块（ids + placed 标记）、库存（13 长度）、selected、玩家位置、设施列表（仅 `{cell,kind,yaw}`，不存探针读数）、`timeOfDay`、`day`、种子、`coreEnergy`。
 
 ## 调试句柄 `window.__app`
 
 - `state`：`seed` / `worldSize` / `materials` / `soundSources` /
   `player.pos/vel/yaw/pitch/grounded/viewMode` / `orbit{distance,yaw,pitch,target}` /
   `timeOfDay` / `day` / `dayLengthSeconds` / `recipes` / `facilityDefs` / `facilities` /
+  `coreEnergy`（全局储能）/ `probes`（探针实时读数 `{cell,reading}`）/
   `inventory`（13 长度）/ `selected` / `placedBlocks` / `miningProgress` / `interactionReach` /
   `lastSavedAt` / `saveError` / `loadNotice` / `uiNotice` / `perf` / `blockAt(g)` /
   `surfaceHeight(x,z)` / `surfaceHeights()` / `energyField.sample(g)` / `energyField.version` /
@@ -77,6 +80,7 @@ npm run build      # tsc --noEmit + vite build
   `giveItem(id,n)`（1..12）/ `teleport(pos)` / `saveNow()` / `loadSave()` / `clearSave()` /
   `setViewMode('first'|'orbit')` / `setOrbit(patch)` / `craft(recipeId)` /
   `placeFacility(kind,cell,yaw?)` / `rotateFacility(cell,deltaRadians?)` / `removeFacility(cell)` /
+  `setCoreEnergy(e)` / `probeAt(cell)` /
   `emitSource(pos,power?,dir?)` / `clearSources()` / `recalcAcoustics()` /
   `setTuning(patch)` / `resetTuning()`
 
@@ -102,6 +106,14 @@ window.__app.debug.saveNow();
 - `debug.clearSources()` 会清空全部声源（含固定环境源）；`debug.emitSource(pos, power?, dir?)` 添加会话级调试声源；`reset()` 恢复默认。
 - `debug.recalcAcoustics()` 手动强制重算；`debug.setTuning(patch)` / `debug.resetTuning()` 调整全局声学缩放（吸收/透射/距离指数/绕射强度）并立即重算。
 - 所有调试声学钩子均会校验输入；非法输入抛中文错误。
+
+## 能量核心与探针
+
+- `state.coreEnergy` 是**唯一全局储能字段**，不提供 `state.core.energy` 实例语义；所有核心设施采收/汇入同一池，正常游戏路径只增不减。
+- 核心每 `HARVEST_TICK_MS=500ms` 按 `Δ = 0.5 × (E_L+E_M+E_H)` 对所在格采样入账，能量场与 UI/可视化同源；`debug.setCoreEnergy(e)` 仅改会话值，不写档，`reset()` 恢复 0。
+- 3 个固定声源格不可放置普通方块/设施，尝试放置会得到中文提示；`state.soundSources` 仍固定且 `dominantBand` 为 0/1/2。
+- `debug.probeAt(cell)` 不要求先放探针，可在任意整数格读取实时三频能量；非法/越界/NaN 抛中文错误。
+- `state.probes` 只包含已放置探针的 `{cell,reading}`，reading 与 `energyField.sample(cell)` 完全同源且不写入存档。
 
 ## 声场视图
 

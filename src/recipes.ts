@@ -2,7 +2,8 @@
  * S3 配方/物品/设施定义 —— 唯一数据源。
  * - 物品 id 1..7 = 材料（materials.ts），8..12 = 设施物品（本文件）。
  * - 配方 data 同时供 state.recipes 与合成 UI 使用，禁止两处重复定义。
- * - 设施能力清单在 S3 全部为 false（无假功能）。
+ * - 设施能力清单只反映本 sprint 已实现的真实能力（S6：core=store、probe=read），
+ *   无任何逻辑门/记忆/时钟等未实现功能。
  */
 import type { FacilityKind, ItemDef } from './types';
 
@@ -29,14 +30,9 @@ export interface FacilityDef {
   kind: FacilityKind;
   name: string;
   itemId: number;
-  implemented: false;
-  abilities: {
-    core: false;
-    cannon: false;
-    probe: false;
-    duct: false;
-    relay: false;
-  };
+  implemented: boolean;
+  /** 能力表只反映本 sprint 已实现的真实行为；无 logic/and/or/not/memory/clock 等未实现语义。 */
+  abilities: Record<string, boolean>;
 }
 
 /** 物品 id → 中文名（1..12；1 泡沫/2 木材/3 玻璃/4 石材/5 混凝土/6 金属/7 土层） */
@@ -77,15 +73,15 @@ export const FACILITY_KIND_BY_ITEM: Record<number, FacilityKind> = {
 export const MIN_FACILITY_ITEM_ID = 8;
 export const MAX_FACILITY_ITEM_ID = 12;
 
-/** 5 类设施定义（S3 无任何行为；abilities 全 false） */
+/** 5 类设施定义（S6：core/probe 已实现；cannon/duct/relay 本 sprint 不做真实能力） */
 export const FACILITY_DEFS: readonly FacilityDef[] = [
   {
     id: 1,
     kind: 'core',
     name: '能量核心',
     itemId: 8,
-    implemented: false,
-    abilities: { core: false, cannon: false, probe: false, duct: false, relay: false },
+    implemented: true,
+    abilities: { store: true },
   },
   {
     id: 2,
@@ -93,15 +89,15 @@ export const FACILITY_DEFS: readonly FacilityDef[] = [
     name: '声波炮',
     itemId: 9,
     implemented: false,
-    abilities: { core: false, cannon: false, probe: false, duct: false, relay: false },
+    abilities: {},
   },
   {
     id: 3,
     kind: 'probe',
     name: '声学探针',
     itemId: 10,
-    implemented: false,
-    abilities: { core: false, cannon: false, probe: false, duct: false, relay: false },
+    implemented: true,
+    abilities: { read: true },
   },
   {
     id: 4,
@@ -109,7 +105,7 @@ export const FACILITY_DEFS: readonly FacilityDef[] = [
     name: '声导管',
     itemId: 11,
     implemented: false,
-    abilities: { core: false, cannon: false, probe: false, duct: false, relay: false },
+    abilities: {},
   },
   {
     id: 5,
@@ -117,7 +113,7 @@ export const FACILITY_DEFS: readonly FacilityDef[] = [
     name: '中继器',
     itemId: 12,
     implemented: false,
-    abilities: { core: false, cannon: false, probe: false, duct: false, relay: false },
+    abilities: {},
   },
 ];
 
