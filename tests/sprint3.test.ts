@@ -271,8 +271,8 @@ describe('S3 存档 v2 与迁移', () => {
   });
 });
 
-describe('S6 设施定义精确 schema（SP6-08）', () => {
-  it('facilityDefs 5 类：core/probe implemented=true 且能力精确，其余无真实能力', () => {
+describe('S6/S7 设施定义精确 schema（SP6-08 / SP7-06）', () => {
+  it('facilityDefs 5 类：core/probe/duct/relay implemented=true 且能力精确，cannon 未实现，无逻辑门', () => {
     const { app } = makeApp();
     expect(app.state.facilityDefs).toHaveLength(5);
     expect(FACILITY_DEFS).toHaveLength(5);
@@ -281,10 +281,12 @@ describe('S6 设施定义精确 schema（SP6-08）', () => {
     expect(defs.core.abilities).toEqual({ store: true });
     expect(defs.probe.implemented).toBe(true);
     expect(defs.probe.abilities).toEqual({ read: true });
-    for (const kind of ['cannon', 'duct', 'relay'] as const) {
-      expect(defs[kind].implemented).toBe(false);
-      expect(defs[kind].abilities).toEqual({});
-    }
+    expect(defs.duct.implemented).toBe(true);
+    expect(defs.duct.abilities).toEqual({ transport: true });
+    expect(defs.relay.implemented).toBe(true);
+    expect(defs.relay.abilities).toEqual({ boost: true });
+    expect(defs.cannon.implemented).toBe(false);
+    expect(defs.cannon.abilities).toEqual({});
     const allKeys = new Set(app.state.facilityDefs.flatMap((f) => Object.keys(f.abilities)));
     for (const forbidden of ['logic', 'and', 'or', 'not', 'memory', 'clock']) {
       expect(allKeys.has(forbidden)).toBe(false);

@@ -24,6 +24,8 @@ import {
 } from './facility';
 import { AcousticEngine } from './acoustics';
 import type { AcousticEvent, AcousticTuning, BandEnergy, EnergyField } from './acoustics';
+import { computeDuctNetwork, ductEnergyFromNetwork } from './duct';
+import type { DuctNetworkState } from './duct';
 import { findStandingSpawn, generateWorld } from './worldgen';
 import type { GeneratedWorld } from './worldgen';
 import {
@@ -99,6 +101,10 @@ export class Game {
   acoustics: AcousticEngine;
   /** S4 当前能量场（运行时临时，不持久化）。 */
   energyField!: EnergyField;
+  /** S7：导管网络运行时状态（不持久化；由 recalcAcoustics 统一重算）。 */
+  private ductNetwork: DuctNetworkState = { version: 0, nodes: [], networkTotal: [0, 0, 0] };
+  /** S7：网络重算版本计数（每次 refreshDuctNetwork 递增）。 */
+  private ductNetworkVersion = 0;
   /** S4 固定环境源开关（debug.clearSources 后为 false，reset 恢复）。 */
   private fixedSourcesEnabled = true;
   /** S4 会话级调试声源。 */
@@ -116,6 +122,11 @@ export class Game {
   /** S6：对外/UI 统一读当前储能：override ?? base。 */
   get coreEnergy(): number {
     return this.coreEnergyOverride ?? this.coreEnergyBase;
+  }
+
+  /** S7：只读访问当前导管网络（apphook 复制，外部不拿活引用）。 */
+  get ductNetworkState(): Readonly<DuctNetworkState> {
+    return this.ductNetwork;
   }
 
   /** S6：采收计时器（ms）；每个 core 设施按 HARVEST_TICK_MS 结算。 */
@@ -262,7 +273,19 @@ export class Game {
     const elapsed = this.now() - t0;
     this.lastRecalcDurationMs = Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0;
     this.lastRecalcReason = reason;
+    this.refreshDuctNetwork();
     return this.energyField;
+  }
+
+  /** S7：统一网络重算入口（与每次声学重算同帧；网络能量仅在本模块产生）。 */
+  private refreshDuctNetwork(): void {
+    this.ductNetworkVersion += 1;
+    this.ductNetwork = computeDuctNetwork(
+      this.world,
+      this.energyField,
+      this.activeSoundEvents().map((e) => e.pos),
+      this.ductNetworkVersion,
+    );
   }
 
   /** S5：声场视图开关（UI/热键/debug 共用；只改会话显示状态，不写档/不重算）。 */
@@ -389,12 +412,16 @@ export class Game {
   private harvestCore(): void {
     const cores = this.world.facilityStates().filter((f) => f.kind === 'core');
     if (cores.length === 0) return;
-    let delta = 0;
+    // E_direct 按 core 分别求和；E_network 为全局出口去重后的单一项，每个 tick 只入账一次。
+    let directSum = 0;
     for (const core of cores) {
       const cell = blockCoords(core.pos);
       const e = this.energyField.sample(cell);
-      delta += HARVEST_EFFICIENCY * (e[0] + e[1] + e[2]);
+      directSum += e[0] + e[1] + e[2];
     }
+    const networkTotal = this.ductNetwork.networkTotal;
+    const networkSum = networkTotal[0] + networkTotal[1] + networkTotal[2];
+    const delta = HARVEST_EFFICIENCY * (directSum + networkSum);
     if (delta > 0) {
       if (this.coreEnergyOverride !== null) {
         this.coreEnergyOverride += delta;
@@ -429,6 +456,25 @@ export class Game {
       throw new Error('probeAt: cell 超出世界边界');
     }
     return this.energyField.sample([x, y, z]);
+  }
+
+  /** S7 导管网络调试读取：合法节点返回三频能量；合法非节点返回 [0,0,0]；非法/越界/NaN 抛中文错误。 */
+  ductEnergyAt(cell: unknown): BandEnergy {
+    if (!Array.isArray(cell) || cell.length !== 3) {
+      throw new Error('ductEnergyAt: cell 需为 [x,y,z] 三元素数组');
+    }
+    const [x, y, z] = cell as unknown[];
+    if (
+      typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number' ||
+      !Number.isInteger(x) || !Number.isInteger(y) || !Number.isInteger(z) ||
+      !Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)
+    ) {
+      throw new Error('ductEnergyAt: cell 必须为整数坐标三元组');
+    }
+    if (!inBounds(x, y, z)) {
+      throw new Error('ductEnergyAt: cell 超出世界边界');
+    }
+    return ductEnergyFromNetwork(this.ductNetwork, [x, y, z]);
   }
 
   /** S6：3 个固定环境声源格不可被普通方块/设施占用。 */

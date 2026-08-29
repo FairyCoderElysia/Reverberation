@@ -66,6 +66,11 @@ export const HARVEST_TICK_MS = 500;
 /** Sprint 6：核心采收效率 η（全局能源池唯一缩放系数；tech-design §3.6）。 */
 export const HARVEST_EFFICIENCY = 0.5;
 
+/** Sprint 7：声导管网络常量（contract v1.3 单源；每进入一个 duct 节点保留 90%）。 */
+export const DUCT_TRANSMIT = 0.9;
+/** Sprint 7：中继器补强增益（每进入一个 relay 节点乘 1.5 一次；入口 relay 不执行入口增益）。 */
+export const RELAY_GAIN = 1.5;
+
 /** 轨道俯瞰默认参数（F4B）：距离/初始偏航/俯仰；target 由 Game 启动时设为玩家出生点附近。 */
 export const ORBIT_DEFAULT_DISTANCE = 42;
 export const ORBIT_DEFAULT_YAW = Math.PI * 0.25;

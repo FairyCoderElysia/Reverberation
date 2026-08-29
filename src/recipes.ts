@@ -2,7 +2,8 @@
  * S3 配方/物品/设施定义 —— 唯一数据源。
  * - 物品 id 1..7 = 材料（materials.ts），8..12 = 设施物品（本文件）。
  * - 配方 data 同时供 state.recipes 与合成 UI 使用，禁止两处重复定义。
- * - 设施能力清单只反映本 sprint 已实现的真实能力（S6：core=store、probe=read），
+ * - 设施能力清单只反映本 sprint 已实现的真实能力（S6：core=store、probe=read；
+ *   S7：duct=transport、relay=boost；cannon 仍未实现），
  *   无任何逻辑门/记忆/时钟等未实现功能。
  */
 import type { FacilityKind, ItemDef } from './types';
@@ -25,10 +26,12 @@ export interface Recipe {
   output: RecipeOutput;
 }
 
-/** 设施能力精确 schema：core=store、probe=read；其余无任何能力键（编译期禁止 logic 等误加）。 */
+/** 设施能力精确 schema：core=store、probe=read、duct=transport、relay=boost；cannon 无任何能力键（编译期禁止 logic 等误加）。 */
 export type FacilityAbilities =
   | { store: true }
   | { read: true }
+  | { transport: true }
+  | { boost: true }
   | Record<string, never>;
 
 export interface FacilityDef {
@@ -79,7 +82,7 @@ export const FACILITY_KIND_BY_ITEM: Record<number, FacilityKind> = {
 export const MIN_FACILITY_ITEM_ID = 8;
 export const MAX_FACILITY_ITEM_ID = 12;
 
-/** 5 类设施定义（S6：core/probe 已实现；cannon/duct/relay 本 sprint 不做真实能力） */
+/** 5 类设施定义（S7：core/probe/duct/relay 已实现；cannon 待 F11）。 */
 export const FACILITY_DEFS: readonly FacilityDef[] = [
   {
     id: 1,
@@ -110,16 +113,16 @@ export const FACILITY_DEFS: readonly FacilityDef[] = [
     kind: 'duct',
     name: '声导管',
     itemId: 11,
-    implemented: false,
-    abilities: {},
+    implemented: true,
+    abilities: { transport: true },
   },
   {
     id: 5,
     kind: 'relay',
     name: '中继器',
     itemId: 12,
-    implemented: false,
-    abilities: {},
+    implemented: true,
+    abilities: { boost: true },
   },
 ];
 

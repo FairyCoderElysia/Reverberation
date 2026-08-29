@@ -13,6 +13,7 @@ import { blockCoords } from './world';
 import type { BandEnergy, FacilityKind, FacilitySnapshot, GraphicTier, OrbitState, PerfState, SimState, SoundSource, SoundViewState, XYZA } from './types';
 import type { BlockRef } from './types';
 import { FACILITY_DEFS, RECIPES } from './recipes';
+import type { DuctNetworkNode } from './duct';
 
 export interface AppState {
   seed: number;
@@ -47,6 +48,12 @@ export interface AppState {
   coreEnergy: number;
   /** S6：探针实时只读读数（与 energyField.sample 同源；不持久化） */
   probes: { cell: XYZA; reading: BandEnergy }[];
+  /** S7：导管网络只读状态（运行时，不持久化；nodes 含未连通节点，未连通能量为 [0,0,0]） */
+  ductNetwork: {
+    nodes: DuctNetworkNode[];
+    version: number;
+    networkTotal: BandEnergy;
+  };
   /** S2：库存（副本，index 1..12 为物品数量） */
   inventory: number[];
   /** S2：当前选中物品 id（1..12） */
@@ -116,6 +123,8 @@ export interface DebugHooks {
   setCoreEnergy: (e: number) => void;
   /** S6：读取任意格实时声能（不要求先放置探针；非法/越界/NaN 抛中文错误） */
   probeAt: (cell: XYZA) => BandEnergy;
+  /** S7：读取导管网络节点三频能量（合法非节点 [0,0,0]；非法/越界/NaN 抛中文错误） */
+  ductEnergyAt: (cell: XYZA) => BandEnergy;
   emitSource: (pos: XYZA, power?: BandEnergy, dir?: XYZA) => void;
   clearSources: () => void;
   recalcAcoustics: () => void;
@@ -250,6 +259,18 @@ export function buildApp(
           cell: blockCoords(f.pos),
           reading: game.energyField.sample(blockCoords(f.pos)),
         }));
+    },
+    get ductNetwork() {
+      const n = game.ductNetworkState;
+      return {
+        nodes: n.nodes.map((node) => ({
+          cell: [node.cell[0], node.cell[1], node.cell[2]] as XYZA,
+          kind: node.kind,
+          energy: [node.energy[0], node.energy[1], node.energy[2]] as BandEnergy,
+        })),
+        version: n.version,
+        networkTotal: [n.networkTotal[0], n.networkTotal[1], n.networkTotal[2]] as BandEnergy,
+      };
     },
     get inventory() {
       return game.inventory.slice();
@@ -429,6 +450,9 @@ export function buildApp(
     },
     probeAt: (cell) => {
       return game.probeAt(cell);
+    },
+    ductEnergyAt: (cell) => {
+      return game.ductEnergyAt(cell);
     },
     emitSource: (pos, power, dir) => {
       game.emitSource(pos, power, dir);
