@@ -16,6 +16,9 @@ import {
   ACOUSTIC_DIFFRACT_MAX_DIST,
   ACOUSTIC_DIR_SPREAD,
   ACOUSTIC_GOLDEN_ANGLE,
+  ACOUSTIC_HIGH_RAY_COUNT,
+  ACOUSTIC_LOW_RAY_COUNT,
+  ACOUSTIC_MAX_RAY_COUNT,
   ACOUSTIC_MAX_RAY_DIST,
   ACOUSTIC_PRINCIPAL_DIRS,
   ACOUSTIC_TUNING_RANGES,
@@ -99,24 +102,39 @@ function mergeField(target: Map<number, BandEnergy>, src: Map<number, BandEnergy
   }
 }
 
-/** 全向/定向确定性方向序列 */
+/**
+ * 全向固定最大方向序列。
+ *
+ * 先放 26 个主方向，再放原 high 档的 102 个 Fibonacci 球面方向（前 128 条与
+ * 历史 high 档一致），最后补足到 ACOUSTIC_MAX_RAY_COUNT。这样任意 rayCount 的
+ * 返回值都是该固定序列的前缀：low(64) ⊆ high(128) ⊆ 更多射线，保持严格嵌套。
+ */
+const FIXED_OMNI_DIRS: readonly XYZA[] = (() => {
+  const dirs: XYZA[] = [];
+  for (const d of ACOUSTIC_PRINCIPAL_DIRS) {
+    dirs.push([d[0], d[1], d[2]]);
+  }
+  const highSphereCount = ACOUSTIC_HIGH_RAY_COUNT - ACOUSTIC_PRINCIPAL_DIRS.length;
+  for (let i = 0; i < highSphereCount; i++) {
+    const y = 1 - (2 * (i + 0.5)) / highSphereCount;
+    const r = Math.sqrt(Math.max(0, 1 - y * y));
+    const phi = i * ACOUSTIC_GOLDEN_ANGLE;
+    dirs.push([r * Math.cos(phi), y, r * Math.sin(phi)]);
+  }
+  const remainingCount = ACOUSTIC_MAX_RAY_COUNT - ACOUSTIC_HIGH_RAY_COUNT;
+  for (let i = 0; i < remainingCount; i++) {
+    const y = 1 - (2 * (i + 0.5)) / remainingCount;
+    const r = Math.sqrt(Math.max(0, 1 - y * y));
+    const phi = i * ACOUSTIC_GOLDEN_ANGLE;
+    dirs.push([r * Math.cos(phi), y, r * Math.sin(phi)]);
+  }
+  return dirs;
+})();
+
+/** 全向/定向确定性方向序列；固定最大序列，返回请求数量的前缀。 */
 function deterministicDirections(rayCount: number, dir?: XYZA): XYZA[] {
-  const out: XYZA[] = [];
   if (!dir) {
-    // 方向回归基础方向集优先：主轴 + 面对角 + 体对角（26 个确定性主方向），
-    // 保证 low 档也能覆盖斜向/非主轴入射；剩余预算再填充 Fibonacci 球面。
-    const principalCount = Math.min(rayCount, ACOUSTIC_PRINCIPAL_DIRS.length);
-    for (let i = 0; i < principalCount; i++) {
-      out.push([ACOUSTIC_PRINCIPAL_DIRS[i][0], ACOUSTIC_PRINCIPAL_DIRS[i][1], ACOUSTIC_PRINCIPAL_DIRS[i][2]]);
-    }
-    const sphereCount = Math.max(0, rayCount - principalCount);
-    for (let i = 0; i < sphereCount; i++) {
-      const y = 1 - (2 * (i + 0.5)) / sphereCount;
-      const r = Math.sqrt(Math.max(0, 1 - y * y));
-      const phi = i * ACOUSTIC_GOLDEN_ANGLE;
-      out.push([r * Math.cos(phi), y, r * Math.sin(phi)]);
-    }
-    return out;
+    return FIXED_OMNI_DIRS.slice(0, Math.min(rayCount, FIXED_OMNI_DIRS.length));
   }
 
   const main = normalizeDir(dir);
@@ -133,16 +151,28 @@ function deterministicDirections(rayCount: number, dir?: XYZA): XYZA[] {
     main[2] * t0[0] - main[0] * t0[2],
     main[0] * t0[1] - main[1] * t0[0],
   ]);
-  // 定向锥：第一束严格沿 main，其余围绕 main 展开，形成确定性的窄锥。
+  // 定向锥也使用固定最大序列：第 1 束沿 main，第 2..64 束为 low 档内圈，
+  // 第 65..128 束为 high 档外圈；更高 rayCount 继续按黄金角填充。
   const spread = ACOUSTIC_DIR_SPREAD;
-  for (let i = 0; i < rayCount; i++) {
+  const out: XYZA[] = [];
+  const total = Math.min(rayCount, ACOUSTIC_MAX_RAY_COUNT);
+  for (let i = 0; i < total; i++) {
     if (i === 0) {
       out.push([main[0], main[1], main[2]]);
       continue;
     }
-    const u = (i - 0.5) / rayCount;
+    let u: number;
+    if (i < ACOUSTIC_LOW_RAY_COUNT) {
+      u = (i - 0.5) / ACOUSTIC_LOW_RAY_COUNT;
+    } else if (i < ACOUSTIC_HIGH_RAY_COUNT) {
+      const j = i - ACOUSTIC_LOW_RAY_COUNT;
+      u = 0.5 + (j + 0.5) / (ACOUSTIC_HIGH_RAY_COUNT - ACOUSTIC_LOW_RAY_COUNT);
+    } else {
+      const j = i - ACOUSTIC_HIGH_RAY_COUNT;
+      u = (j + 0.5) / (ACOUSTIC_MAX_RAY_COUNT - ACOUSTIC_HIGH_RAY_COUNT);
+    }
     const v = (i * ACOUSTIC_GOLDEN_ANGLE * 2.399963) % TWO_PI;
-    const r = spread * Math.sqrt(u * 2);
+    const r = spread * Math.sqrt(Math.min(1, u * 2));
     const px = r * Math.cos(v);
     const py = r * Math.sin(v);
     const dx = main[0] + px * t0[0] + py * t1[0];
@@ -239,8 +269,8 @@ export class AcousticEngine {
   /** S5 性能档：覆写传播参数（射线/反弹/绕射/阈值）。只影响精度，不改方向性。 */
   setParams(patch: Partial<AcousticParams>): void {
     if (patch.rays !== undefined) {
-      if (!Number.isInteger(patch.rays) || patch.rays < 1 || patch.rays > 512) {
-        throw new Error('acoustics.setParams: rays 需为 1..512 的整数');
+      if (!Number.isInteger(patch.rays) || patch.rays < 1 || patch.rays > ACOUSTIC_MAX_RAY_COUNT) {
+        throw new Error('acoustics.setParams: rays 需为 1..' + ACOUSTIC_MAX_RAY_COUNT + ' 的整数');
       }
       this.params.rays = patch.rays;
     }

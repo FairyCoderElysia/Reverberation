@@ -73,9 +73,9 @@ export const ACOUSTIC_DEFAULT_PARAMS = {
   rays: 128,
   bounces: 3,
   diffract: true,
-  // 默认取 1e-6：低于 tech-design 附录的 1e-4，是为了保留 SP4-02/SP4-05 所要求的
-  // 远场 >1e-6 与遮挡后 >0 的低能量可读格；高于 0 仍能实现真实阈值稀疏化。
-  fieldThreshold: 1e-6,
+  // 默认 0：配合 low⊆high 的嵌套射线序列，保证“high 读到 0 ⇒ low 必为 0”
+  // 这一方向性不反转的可证性质；需要稀疏化时仍可由 debug.setTuning 提高阈值。
+  fieldThreshold: 0,
 } as const;
 
 /** Sprint 5 性能档：high 档射线/反弹预算（与默认档一致；引用默认参数，避免双份漂移）。 */
@@ -86,7 +86,7 @@ export const ACOUSTIC_PARAMS_LOW = {
   rays: 64,
   bounces: 2,
   diffract: true,
-  fieldThreshold: 1e-6,
+  fieldThreshold: 0,
 } as const;
 
 /** Sprint 5 性能档：模拟目标频率（可 null；本版为事件触发式，读作目标值）。 */
@@ -106,7 +106,7 @@ export const ACOUSTIC_DEFAULT_TUNING = {
   G_TRANS: 1.0,
   G_DIST_EXP: 2.0,
   G_DIFFRACT: 1.0,
-  fieldThreshold: 1e-6,
+  fieldThreshold: 0,
 } as const;
 
 /** 声学调谐参数允许区间（单一来源；超范围在 Game 层统一抛中文错误）。 */
@@ -134,6 +134,16 @@ export const ACOUSTIC_PRINCIPAL_DIRS: ReadonlyArray<readonly [number, number, nu
   [1, 1, 1], [1, 1, -1], [1, -1, 1], [1, -1, -1],
   [-1, 1, 1], [-1, 1, -1], [-1, -1, 1], [-1, -1, -1],
 ] as const;
+
+/** 声学射线数上限（与 AcousticEngine.setParams 的校验上限一致）。 */
+export const ACOUSTIC_MAX_RAY_COUNT = 512;
+
+/**
+ * 嵌套射线序列的档位锚点：固定最大序列前 128 条保持原有 high 档方向集，
+ * low(64) 取前 64 条，因此 low ⊆ high；更高 rayCount 继续追加到上限。
+ */
+export const ACOUSTIC_LOW_RAY_COUNT = 64;
+export const ACOUSTIC_HIGH_RAY_COUNT = 128;
 export const ACOUSTIC_DIR_SPREAD = 0.45;
 export const ACOUSTIC_DIFFRACT_MAX_DIST = 6;
 export const ACOUSTIC_DIFFRACT_BEND = 0.25;

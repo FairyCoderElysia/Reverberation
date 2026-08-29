@@ -256,7 +256,7 @@ describe('SP5 reset：恢复全部会话级 debug 默认状态', () => {
     app.debug.setTuning({ fieldThreshold: 5e-4 });
     expect(game.acoustics.tuningValue.fieldThreshold).toBeCloseTo(5e-4);
     app.debug.setGraphicTier('low');
-    expect(game.acoustics.tuningValue.fieldThreshold).toBeCloseTo(1e-6);
+    expect(game.acoustics.tuningValue.fieldThreshold).toBeCloseTo(0);
   });
 });
 
@@ -386,6 +386,59 @@ describe('SP5 低档方向性回归集（high/low 结论一致）', () => {
     const low = energyFor(c.setup, c.emit, c.sink, 'low');
     expect(c.expected(high)).toBe(true);
     expect(c.expected(low)).toBe(true);
+  });
+});
+
+
+describe('SP5 低档极端墙体方向不反转（QA Major 复现）', () => {
+  function energyFor(
+    setup: (g: Game) => void,
+    emit: XYZA,
+    sink: XYZA,
+    tier: 'high' | 'low',
+  ): BandEnergy {
+    const { app, game } = makeApp();
+    app.debug.clearSources();
+    setup(game);
+    app.debug.setGraphicTier(tier);
+    app.debug.emitSource(emit, [1, 1, 1]);
+    return app.state.energyField.sample(sink);
+  }
+
+  it.each([
+    {
+      name: '3 格斜向混凝土墙（[35,12,33]/[36,12,34]/[37,12,35]）',
+      setup: (g: Game) => {
+        g.world.setBlock([35, 12, 33], 5, 150);
+        g.world.setBlock([36, 12, 34], 5, 150);
+        g.world.setBlock([37, 12, 35], 5, 150);
+      },
+      emit: [32, 12, 30] as XYZA,
+      sink: [38, 12, 36] as XYZA,
+    },
+    {
+      name: '5 格厚混凝土轴心墙（[35..39,12,32]）',
+      setup: (g: Game) => {
+        for (let x = 35; x <= 39; x++) g.world.setBlock([x, 12, 32], 5, 150);
+      },
+      emit: [32, 12, 32] as XYZA,
+      sink: [40, 12, 32] as XYZA,
+    },
+  ])('$name：high 全零则 low 必为零，且混凝土方向一致', ({ setup, emit, sink }) => {
+    const high = energyFor(setup, emit, sink, 'high');
+    const low = energyFor(setup, emit, sink, 'low');
+
+    // 最稳妥的“不反转”断言：若 high 读 [0,0,0]，low 也必须读 [0,0,0]。
+    if (high[0] === 0 && high[1] === 0 && high[2] === 0) {
+      expect(low).toEqual([0, 0, 0]);
+    }
+
+    // 修复后当前两例均为 high/low 非零；同时保持混凝土“低频穿透 ≤ 高频穿透”的方向。
+    expect(high[0]).toBeLessThanOrEqual(high[2]);
+    expect(low[0]).toBeLessThanOrEqual(low[2]);
+    // 平滑断言具体阈值不会因 low/high 能量绝对值不同而误报。
+    expect(high.every((v) => Number.isFinite(v))).toBe(true);
+    expect(low.every((v) => Number.isFinite(v))).toBe(true);
   });
 });
 
