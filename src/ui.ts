@@ -5,11 +5,9 @@
 import { MATERIAL_ZH } from './materials';
 import { FACILITY_KIND_BY_ITEM, itemName } from './recipes';
 import type { Recipe } from './recipes';
-import { BAND_COLORS, FACILITY_COLORS, MATERIAL_COLORS } from './theme';
+import { BAND_COLORS, BAND_ZH, FACILITY_COLORS, MATERIAL_COLORS } from './theme';
 import type { MaterialSpec } from './types';
 import type { MaterialName } from './types';
-
-export const BAND_ZH = ['低频', '中频', '高频'];
 
 /** 库存/选中回流决策的纯函数（Mn5：把 onFrame 接线做成可测路径）。 */
 export function inventorySignature(inventory: number[]): string {

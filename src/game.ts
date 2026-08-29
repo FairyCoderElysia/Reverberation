@@ -891,6 +891,11 @@ export class Game {
     this.fixedSourcesEnabled = true;
     this.debugSources = [];
     this.acoustics.resetTuning();
+    // S5：reset 等价恢复全部调试会话状态为默认（图形档/声场视图/模拟频率/声学档）。
+    this.graphicTier = 'high';
+    this.soundViewVisible = true;
+    this.simPhysicsHz = SIM_PHYSICS_HZ_HIGH;
+    this.acoustics.setParams({ ...ACOUSTIC_PARAMS_HIGH });
     const next = generateWorld(this.seedCounter);
     this.applyWorld(next);
     this.inventory = new Array(13).fill(0) as number[];

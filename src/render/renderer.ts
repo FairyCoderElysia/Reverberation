@@ -252,7 +252,7 @@ export class Renderer {
       return;
     }
     if (!visible) {
-      if (this.soundPoints) this.soundPoints.visible = false;
+      this.disposeSoundPoints();
       this.visualInstances = 0;
       return;
     }
@@ -267,12 +267,7 @@ export class Renderer {
     }
     const step = soundViewStepForTier(this.tier);
     const sampled = sampleSoundView(field, world, step);
-    if (this.soundPoints) {
-      this.soundPoints.geometry.dispose();
-      (this.soundPoints.material as THREE.Material).dispose();
-      this.scene.remove(this.soundPoints);
-      this.soundPoints = null;
-    }
+    this.disposeSoundPoints();
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(sampled.positions, 3));
     geo.setAttribute('color', new THREE.BufferAttribute(sampled.colors, 3));
@@ -291,6 +286,19 @@ export class Renderer {
     this.soundPointTier = this.tier;
     this.soundPointCount = sampled.count;
     this.visualInstances = sampled.count;
+  }
+
+  /** 释放声场可视化点云资源（关闭视图/重建时调用，避免显存长期驻留）。 */
+  private disposeSoundPoints(): void {
+    if (this.soundPoints) {
+      this.soundPoints.geometry.dispose();
+      (this.soundPoints.material as THREE.Material).dispose();
+      this.scene.remove(this.soundPoints);
+      this.soundPoints = null;
+    }
+    this.soundPointVersion = -1;
+    this.soundPointTier = null;
+    this.soundPointCount = 0;
   }
 
   start(onFrame: () => void): void {

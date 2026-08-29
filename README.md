@@ -12,24 +12,24 @@
 ├─ css/style.css         # 深色声学实验室风格样式
 ├─ src/
 │  ├─ main.ts            # 启动编排（载档→生成世界→渲染→输入绑定→__app→循环）
-│  ├─ config.ts          # 可调参数常量（唯一来源，含 S2/S3 玩家物理/交互/存档/时钟常量）
+│  ├─ config.ts          # 可调参数常量（唯一来源，含 S2/S3 玩家物理/交互/存档/时钟、S5 性能档）
 │  ├─ materials.ts       # M2 材料表（唯一数据源，tech-design §3.1）
-│  ├─ acoustics.ts       # M3 三频几何声学传播内核（S4）
+│  ├─ acoustics.ts       # M3 三频几何声学传播内核（S4；S5 性能档/方向回归基础方向集）
 │  ├─ recipes.ts         # S3 配方/物品/设施定义（唯一数据源）
-│  ├─ theme.ts           # 调色板单一常量源（材质 7 色 + 频段 3 色 + 设施色）
+│  ├─ theme.ts           # 调色板单一常量源（材质 7 色 + 频段 3 色与中文标签 + 设施色）
 │  ├─ rng.ts             # 确定性种子 RNG（世界生成禁用 Math.random）
 │  ├─ worldgen.ts        # 地形/矿脉/声源点/出生点生成（确定性）
 │  ├─ world.ts           # M1 体素存储 + 索引公式 + DDA 遍历 + placed 标记 + 设施 Map
 │  ├─ player.ts          # 确定性第一人称物理（重力/跳跃/AABB 碰撞，设施视为实体）
 │  ├─ pick.ts            # 体素拾取（唯一 DDA 实现处，设施可被拾取/放置相邻）
 │  ├─ save.ts            # M9 存档 v2（RLE+base64，schema 版本 + v1 迁移 + 损坏兜底）
-│  ├─ game.ts            # S3 单权威运行时（世界/玩家/库存/合成/设施/时钟/存档）
+│  ├─ game.ts            # S3 单权威运行时（世界/玩家/库存/合成/设施/时钟/存档；S5 会话档/声场/性能指标）
 │  ├─ bench.ts           # 性能 spike：DDA 射线遍历基准
 │  ├─ apphook.ts         # M12 调试句柄 window.__app
 │  ├─ visualization.ts   # S5 声场可视化纯采样层（只读 energyField.sample、三频色带单源）
-│  ├─ ui.ts              # M10（最小子集）：材料面板 + 库存/合成 + 进度/状态
-│  └─ render/renderer.ts # M13 渲染（InstancedMesh + 第一/俯瞰双相机 + 设施网格）
-├─ tests/                # Vitest（材料/世界/索引/句柄/S2/S3）
+│  ├─ ui.ts              # M10（最小子集）：材料面板 + 库存/合成 + 进度/状态 + 声场图例/按钮
+│  └─ render/renderer.ts # M13 渲染（InstancedMesh + 第一/俯瞰双相机 + 设施网格 + S5 声场点云）
+├─ tests/                # Vitest（材料/世界/索引/句柄/S2/S3/S4/S5）
 ```
 
 ## 安装与启动
@@ -118,5 +118,5 @@ window.__app.debug.saveNow();
 
 ## 降级
 
-- URL 带 `?nogl=1` 或浏览器不支持 WebGL2 时：显示中文降级提示（不白屏），`window.__app` 仍可用。
+- URL 带 `?nogl=1` 或浏览器不支持 WebGL2 时：显示中文降级提示（不白屏），`window.__app` 仍可用；声场视图按钮仍可点击并同步状态，图例/按钮 DOM 可正常更新。
 - `window.__app.debug.setGraphicTier('low')` 降低渲染像素比（`state.perf.pixelRatio` 可读），同时降低声学精度与声场可视化密度。

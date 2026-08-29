@@ -58,6 +58,10 @@ function bootInner(): void {
       renderer.setTier(tier);
     },
     () => renderer.getPixelRatio(),
+    (visible: boolean) => {
+      renderSoundLegend(visible);
+      renderSoundViewButton(visible);
+    },
   );
   window.__app = app;
 
@@ -167,6 +171,12 @@ function bootInner(): void {
   });
 }
 
+/** 同步声场视图图例/按钮 DOM（debug.setSoundView / 热键 / 重置后立即调用）。 */
+function syncSoundViewUi(game: Game): void {
+  renderSoundLegend(game.soundViewVisible);
+  renderSoundViewButton(game.soundViewVisible);
+}
+
 /** 键盘 + 鼠标输入绑定。视角：右键拖动 / 指针锁移动；挖掘：按住左键；放置：右键点击。 */
 function bindInput(game: Game, renderer: Renderer): void {
   const keys = new Set<string>();
@@ -196,7 +206,10 @@ function bindInput(game: Game, renderer: Renderer): void {
       if (!e.repeat) game.rotateLookedFacility();
     }
     if (e.code === 'KeyV') {
-      if (!e.repeat) game.setSoundView(!game.soundViewVisible);
+      if (!e.repeat) {
+        game.setSoundView(!game.soundViewVisible);
+        syncSoundViewUi(game);
+      }
     }
     keys.add(e.code);
     syncKeys();
@@ -254,18 +267,6 @@ function bindInput(game: Game, renderer: Renderer): void {
       game.setOrbit({ distance: game.orbit.distance + delta });
     }, { passive: false });
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
-    const viewBtn = document.getElementById('view-toggle');
-    if (viewBtn) {
-      viewBtn.addEventListener('click', () => {
-        game.toggleViewMode();
-      });
-    }
-    const soundViewBtn = document.getElementById('sound-view-toggle');
-    if (soundViewBtn) {
-      soundViewBtn.addEventListener('click', () => {
-        game.setSoundView(!game.soundViewVisible);
-      });
-    }
     canvas.addEventListener('click', () => {
       if (!pointerLocked && document.pointerLockElement !== canvas && game.viewMode === 'first') {
         try {
@@ -276,8 +277,23 @@ function bindInput(game: Game, renderer: Renderer): void {
       }
     });
   } else {
-    // 无 WebGL 降级：只保留键盘
+    // 无 WebGL 降级：仍保留键盘与声场视图按钮绑定（状态可通过 __app 同步）。
     syncKeys();
+  }
+
+  // 视角/声场按钮不依赖画布：无 WebGL 降级时也必须可绑定，避免 UI 死按钮。
+  const viewBtn = document.getElementById('view-toggle');
+  if (viewBtn) {
+    viewBtn.addEventListener('click', () => {
+      game.toggleViewMode();
+    });
+  }
+  const soundViewBtn = document.getElementById('sound-view-toggle');
+  if (soundViewBtn) {
+    soundViewBtn.addEventListener('click', () => {
+      game.setSoundView(!game.soundViewVisible);
+      syncSoundViewUi(game);
+    });
   }
 
   window.addEventListener('pointermove', (e) => {

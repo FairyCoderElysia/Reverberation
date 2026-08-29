@@ -10,7 +10,7 @@ import { BAND_COLORS } from '../src/theme';
 import { sampleSoundView, soundViewStepForTier } from '../src/visualization';
 import { renderSoundLegend, soundLegendHtml } from '../src/ui';
 import { SOUND_VIEW_SAMPLE_STEP_HIGH, SOUND_VIEW_SAMPLE_STEP_LOW } from '../src/config';
-import type { XYZA } from '../src/types';
+import type { BandEnergy, XYZA } from '../src/types';
 
 function makeApp() {
   const world = new World();
@@ -213,6 +213,179 @@ describe('SP5 性能档', () => {
     } finally {
       fetchSpy.mockRestore();
     }
+  });
+});
+
+describe('SP5 reset：恢复全部会话级 debug 默认状态', () => {
+  it('reset 后 graphicTier/soundView/sim/acoustic 均回到 high 默认', () => {
+    const { app } = makeApp();
+    app.debug.setGraphicTier('low');
+    app.debug.setSoundView(false);
+    app.debug.setTuning({ fieldThreshold: 5e-4 });
+    expect(app.state.graphicTier).toBe('low');
+    expect(app.state.soundView.visible).toBe(false);
+    expect(app.state.sim.rayCount).toBe(64);
+
+    app.reset();
+
+    expect(app.state.graphicTier).toBe('high');
+    expect(app.state.soundView.visible).toBe(true);
+    expect(app.state.soundView.legend).toBe(true);
+    expect(app.state.soundView.tier).toBe('high');
+    expect(app.state.sim.rayCount).toBe(128);
+    expect(app.state.sim.bounceCount).toBe(3);
+    expect(app.state.sim.physicsHz).toBe(15);
+    expect(app.state.perf.pixelRatio).toBe(2); // onTierChange('high') 已同步渲染档
+  });
+
+  it('state.sim 为 live getter：持有引用后仍看到最新 ray/bounce/version', () => {
+    const { app } = makeApp();
+    const simRef = app.state.sim;
+    const seedVersion = simRef.version;
+    app.debug.setGraphicTier('low');
+    expect(simRef.rayCount).toBe(64);
+    expect(simRef.bounceCount).toBe(2);
+    app.debug.setGraphicTier('high');
+    expect(simRef.rayCount).toBe(128);
+    app.debug.clearSources();
+    expect(simRef.version).toBeGreaterThan(seedVersion);
+  });
+
+  it('切档 setParams 会同步 tuning.fieldThreshold，避免双份漂移', () => {
+    const { app, game } = makeApp();
+    app.debug.setTuning({ fieldThreshold: 5e-4 });
+    expect(game.acoustics.tuningValue.fieldThreshold).toBeCloseTo(5e-4);
+    app.debug.setGraphicTier('low');
+    expect(game.acoustics.tuningValue.fieldThreshold).toBeCloseTo(1e-6);
+  });
+});
+
+describe('SP5 低档方向性回归集（high/low 结论一致）', () => {
+  interface DirectionCase {
+    name: string;
+    setup: (game: Game) => void;
+    emit: XYZA;
+    sink: XYZA;
+    expected: (e: BandEnergy) => boolean;
+  }
+
+  const cases: DirectionCase[] = [
+    {
+      name: '① 泡沫单格墙（高透低频）',
+      setup: (g) => g.world.setBlock([35, 12, 32], 1, 30),
+      emit: [32, 12, 32],
+      sink: [36, 12, 32],
+      expected: (e) => e[2] < e[0],
+    },
+    {
+      name: '② 混凝土单格墙（低透高频）',
+      setup: (g) => g.world.setBlock([35, 12, 32], 5, 150),
+      emit: [32, 12, 32],
+      sink: [36, 12, 32],
+      expected: (e) => e[0] < e[2],
+    },
+    {
+      name: '③a 泡沫 2 格厚墙',
+      setup: (g) => {
+        g.world.setBlock([35, 12, 32], 1, 30);
+        g.world.setBlock([36, 12, 32], 1, 30);
+      },
+      emit: [32, 12, 32],
+      sink: [37, 12, 32],
+      expected: (e) => e[2] < e[0],
+    },
+    {
+      name: '③b 混凝土 2 格厚墙',
+      setup: (g) => {
+        g.world.setBlock([35, 12, 32], 5, 150);
+        g.world.setBlock([36, 12, 32], 5, 150);
+      },
+      emit: [32, 12, 32],
+      sink: [37, 12, 32],
+      expected: (e) => e[0] < e[2],
+    },
+    {
+      name: '③c 泡沫 3 格厚墙',
+      setup: (g) => {
+        g.world.setBlock([35, 12, 32], 1, 30);
+        g.world.setBlock([36, 12, 32], 1, 30);
+        g.world.setBlock([37, 12, 32], 1, 30);
+      },
+      emit: [32, 12, 32],
+      sink: [38, 12, 32],
+      expected: (e) => e[2] < e[0],
+    },
+    {
+      name: '③d 混凝土 3 格厚墙',
+      setup: (g) => {
+        g.world.setBlock([35, 12, 32], 5, 150);
+        g.world.setBlock([36, 12, 32], 5, 150);
+        g.world.setBlock([37, 12, 32], 5, 150);
+      },
+      emit: [32, 12, 32],
+      sink: [38, 12, 32],
+      expected: (e) => e[0] < e[2],
+    },
+    {
+      name: '④a 泡沫斜向/非主轴入射',
+      setup: (g) => g.world.setBlock([35, 12, 33], 1, 30),
+      emit: [32, 12, 30],
+      sink: [38, 12, 36],
+      expected: (e) => e[2] < e[0],
+    },
+    {
+      name: '④b 混凝土斜向/非主轴入射',
+      setup: (g) => g.world.setBlock([35, 12, 33], 5, 150),
+      emit: [32, 12, 30],
+      sink: [38, 12, 36],
+      expected: (e) => e[0] < e[2],
+    },
+    {
+      name: '⑤a 泡沫小型悬浮遮挡板（绕射/透射方向）',
+      setup: (g) => g.world.setBlock([35, 13, 32], 1, 30),
+      emit: [32, 13, 32],
+      sink: [36, 13, 32],
+      expected: (e) => e[2] < e[0] && e[0] + e[1] + e[2] > 0,
+    },
+    {
+      name: '⑤b 混凝土小型悬浮遮挡板（绕射/透射方向）',
+      setup: (g) => g.world.setBlock([35, 13, 32], 5, 150),
+      emit: [32, 13, 32],
+      sink: [36, 13, 32],
+      expected: (e) => e[0] < e[2] && e[0] + e[1] + e[2] > 0,
+    },
+    {
+      name: '⑥ 设施全反射障碍（透射/绕射均为 0）',
+      setup: (g) => {
+        g.inventory[8] = 1;
+        const res = g.placeFacility('core', [35, 12, 32], 0);
+        expect(res.ok).toBe(true);
+      },
+      emit: [32, 12, 32],
+      sink: [36, 12, 32],
+      expected: (e) => e[0] === 0 && e[1] === 0 && e[2] === 0,
+    },
+  ];
+
+  function energyFor(
+    setup: (g: Game) => void,
+    emit: XYZA,
+    sink: XYZA,
+    tier: 'high' | 'low',
+  ): BandEnergy {
+    const { app, game } = makeApp();
+    app.debug.clearSources();
+    setup(game);
+    app.debug.setGraphicTier(tier);
+    app.debug.emitSource(emit, [1, 1, 1]);
+    return app.state.energyField.sample(sink);
+  }
+
+  it.each(cases)('$name', (c) => {
+    const high = energyFor(c.setup, c.emit, c.sink, 'high');
+    const low = energyFor(c.setup, c.emit, c.sink, 'low');
+    expect(c.expected(high)).toBe(true);
+    expect(c.expected(low)).toBe(true);
   });
 });
 

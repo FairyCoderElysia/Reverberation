@@ -21,6 +21,9 @@ export const BAND_COLORS: readonly string[] = [
   '#5dd9ff', // 高频
 ];
 
+/** 频段中文标签：与 BAND_COLORS 同一单源文件（0 低频 / 1 中频 / 2 高频）。 */
+export const BAND_ZH: readonly string[] = ['低频', '中频', '高频'];
+
 /** 设施种类展示色（S3 基础可视化；与 kind 顺序无关，按 kind 索引） */
 export const FACILITY_COLORS: Readonly<Record<string, string>> = {
   core: '#38e8b0',

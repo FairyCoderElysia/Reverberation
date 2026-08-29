@@ -78,13 +78,8 @@ export const ACOUSTIC_DEFAULT_PARAMS = {
   fieldThreshold: 1e-6,
 } as const;
 
-/** Sprint 5 性能档：high 档射线/反弹预算（与默认档一致）。 */
-export const ACOUSTIC_PARAMS_HIGH = {
-  rays: 128,
-  bounces: 3,
-  diffract: true,
-  fieldThreshold: 1e-6,
-} as const;
+/** Sprint 5 性能档：high 档射线/反弹预算（与默认档一致；引用默认参数，避免双份漂移）。 */
+export const ACOUSTIC_PARAMS_HIGH = { ...ACOUSTIC_DEFAULT_PARAMS } as const;
 
 /** Sprint 5 性能档：low 档射线/反弹预算（tech-design §5.4：64×2）。 */
 export const ACOUSTIC_PARAMS_LOW = {
@@ -101,6 +96,9 @@ export const SIM_PHYSICS_HZ_LOW = 10;
 /** Sprint 5 声场视图采样密度：high 每 2 格采样一次，low 每 3 格采样一次（保证 low visualInstances 严格下降）。 */
 export const SOUND_VIEW_SAMPLE_STEP_HIGH = 2;
 export const SOUND_VIEW_SAMPLE_STEP_LOW = 3;
+
+/** Sprint 5 声场视图视觉强度映射系数（能量→亮度，单一来源；非物理系数，仅展示编码）。 */
+export const SOUND_VIEW_STRENGTH_SCALE = 20;
 
 /** 声学全局缩放默认值（唯一夸张层；debug.setTuning 可覆写运行时副本）。 */
 export const ACOUSTIC_DEFAULT_TUNING = {
@@ -123,6 +121,19 @@ export const ACOUSTIC_TUNING_RANGES = {
 /** S4 声学传播与绕射预算常量（单一来源；acoustics.ts 只引用，不散落写死）。 */
 export const ACOUSTIC_MAX_RAY_DIST = 160;
 export const ACOUSTIC_GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+/**
+ * 声学方向回归基础方向集：主轴 6 + 面对角 12 + 体对角 8 = 26。
+ * 全向声源无论 high/low 都会先保留这些主方向，确保斜向/非主轴用例有可复现的
+ * 确定性射线覆盖；剩余预算再填充 Fibonacci 球面。
+ */
+export const ACOUSTIC_PRINCIPAL_DIRS: ReadonlyArray<readonly [number, number, number]> = [
+  [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1],
+  [1, 1, 0], [1, -1, 0], [-1, 1, 0], [-1, -1, 0],
+  [1, 0, 1], [1, 0, -1], [-1, 0, 1], [-1, 0, -1],
+  [0, 1, 1], [0, 1, -1], [0, -1, 1], [0, -1, -1],
+  [1, 1, 1], [1, 1, -1], [1, -1, 1], [1, -1, -1],
+  [-1, 1, 1], [-1, 1, -1], [-1, -1, 1], [-1, -1, -1],
+] as const;
 export const ACOUSTIC_DIR_SPREAD = 0.45;
 export const ACOUSTIC_DIFFRACT_MAX_DIST = 6;
 export const ACOUSTIC_DIFFRACT_BEND = 0.25;

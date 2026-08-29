@@ -8,7 +8,7 @@
 import type { EnergyField } from './acoustics';
 import type { GraphicTier } from './types';
 import { BAND_COLORS } from './theme';
-import { SOUND_VIEW_SAMPLE_STEP_HIGH, SOUND_VIEW_SAMPLE_STEP_LOW } from './config';
+import { SOUND_VIEW_SAMPLE_STEP_HIGH, SOUND_VIEW_SAMPLE_STEP_LOW, SOUND_VIEW_STRENGTH_SCALE } from './config';
 import { WORLD_X, WORLD_Y, WORLD_Z } from './world';
 import type { World } from './world';
 
@@ -58,7 +58,7 @@ export function sampleSoundView(
         if (e[1] > e[band]) band = 1;
         if (e[2] > e[band]) band = 2;
         const [r, g, b] = rgbCache[band] ?? [1, 1, 1];
-        const strength = Math.min(1, total * 20);
+        const strength = Math.min(1, total * SOUND_VIEW_STRENGTH_SCALE);
         positions.push(x + 0.5, y + 0.5, z + 0.5);
         colors.push(r * strength, g * strength, b * strength);
       }

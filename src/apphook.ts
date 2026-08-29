@@ -147,6 +147,7 @@ export function buildApp(
   onMaterialChange: () => void,
   onTierChange: (t: GraphicTier) => void,
   readPixelRatio: () => number,
+  onSoundViewChange?: (visible: boolean) => void,
 ): __App {
   const perf: PerfState = {
     fps: 0,
@@ -288,14 +289,26 @@ export function buildApp(
       };
     },
     get sim() {
-      const params = game.acoustics.getParams();
+      // live getter：调用方持有 const s = app.state.sim 后，重算/切档读数仍实时。
       return {
-        version: game.energyField.version,
-        lastRecalcDurationMs: game.lastRecalcDurationMs,
-        lastRecalcReason: game.lastRecalcReason,
-        rayCount: params.rays,
-        bounceCount: params.bounces,
-        physicsHz: game.simPhysicsHz,
+        get version() {
+          return game.energyField.version;
+        },
+        get lastRecalcDurationMs() {
+          return game.lastRecalcDurationMs;
+        },
+        get lastRecalcReason() {
+          return game.lastRecalcReason;
+        },
+        get rayCount() {
+          return game.acoustics.getParams().rays;
+        },
+        get bounceCount() {
+          return game.acoustics.getParams().bounces;
+        },
+        get physicsHz() {
+          return game.simPhysicsHz;
+        },
       };
     },
   };
@@ -343,6 +356,8 @@ export function buildApp(
         throw new Error('setSoundView: visible 需为布尔值');
       }
       game.setSoundView(visible);
+      // 立即同步图例/按钮 DOM，避免只能等下一帧 onFrame。
+      onSoundViewChange?.(visible);
     },
     benchRay: (opts) => {
       const res = runBenchRay(game.world, opts ?? {});
@@ -409,6 +424,9 @@ export function buildApp(
     game.reset();
     onWorldChange(game);
     onMaterialChange();
+    onTierChange(game.graphicTier);
+    perf.pixelRatio = readPixelRatio();
+    onSoundViewChange?.(game.soundViewVisible);
   };
 
   return { state, reset, debug };

@@ -17,6 +17,7 @@ import {
   ACOUSTIC_DIR_SPREAD,
   ACOUSTIC_GOLDEN_ANGLE,
   ACOUSTIC_MAX_RAY_DIST,
+  ACOUSTIC_PRINCIPAL_DIRS,
   ACOUSTIC_TUNING_RANGES,
 } from './config';
 import type { BandEnergy, MaterialSpec, XYZA } from './types';
@@ -102,17 +103,13 @@ function mergeField(target: Map<number, BandEnergy>, src: Map<number, BandEnergy
 function deterministicDirections(rayCount: number, dir?: XYZA): XYZA[] {
   const out: XYZA[] = [];
   if (!dir) {
-    // 固定轴射线优先：保证沿主轴的确定性采样在回归脚本中可重复、可断言。
-    const cardinals: XYZA[] = [
-      [1, 0, 0],
-      [-1, 0, 0],
-      [0, 1, 0],
-      [0, -1, 0],
-      [0, 0, 1],
-      [0, 0, -1],
-    ];
-    const sphereCount = Math.max(0, rayCount - cardinals.length);
-    for (let i = 0; i < cardinals.length && i < rayCount; i++) out.push(cardinals[i]);
+    // 方向回归基础方向集优先：主轴 + 面对角 + 体对角（26 个确定性主方向），
+    // 保证 low 档也能覆盖斜向/非主轴入射；剩余预算再填充 Fibonacci 球面。
+    const principalCount = Math.min(rayCount, ACOUSTIC_PRINCIPAL_DIRS.length);
+    for (let i = 0; i < principalCount; i++) {
+      out.push([ACOUSTIC_PRINCIPAL_DIRS[i][0], ACOUSTIC_PRINCIPAL_DIRS[i][1], ACOUSTIC_PRINCIPAL_DIRS[i][2]]);
+    }
+    const sphereCount = Math.max(0, rayCount - principalCount);
     for (let i = 0; i < sphereCount; i++) {
       const y = 1 - (2 * (i + 0.5)) / sphereCount;
       const r = Math.sqrt(Math.max(0, 1 - y * y));
@@ -260,7 +257,9 @@ export class AcousticEngine {
       if (!Number.isFinite(patch.fieldThreshold) || patch.fieldThreshold < 0) {
         throw new Error('acoustics.setParams: fieldThreshold 需为 >=0 的有限数');
       }
+      // 单一阈值语义：params 与 tuning 同步，避免切档/调参双份漂移。
       this.params.fieldThreshold = patch.fieldThreshold;
+      this.tuning.fieldThreshold = patch.fieldThreshold;
     }
   }
 
